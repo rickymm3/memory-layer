@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}Response Traces{% endblock %}
+
+{% block content %}
+<style>
+  /* Verdict badges */
+  .verdict-badge {
+    display: inline-block; padding: .15rem .45rem;
+    border-radius: .3rem; font-size: .75rem; font-weight: 600; white-space: nowrap;
+  }
+  .v-approved            { background: #dcfce7; color: #166534; }
+  .v-needs_caveat        { background: #fef9c3; color: #854d0e; }
+  .v-needs_revision      { background: #ffedd5; color: #9a3412; }
+  .v-needs_verification  { background: #dbeafe; color: #1e40af; }
+  .v-blocked             { background: #fee2e2; color: #991b1b; }
+
+  .risk-badge {
+    display: inline-block; padding: .1rem .3rem;
+    border-radius: .2rem; font-size: .72rem; font-weight: 600;
+  }
+  .risk-none   { background: #f0fdf4; color: #15803d; }
+  .risk-low    { background: #fef9c3; color: #713f12; }
+  .risk-medium { background: #ffedd5; color: #9a3412; }
+  .risk-high   { background: #fee2e2; color: #991b1b; }
+
+  .quick-filters { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .qf { padding: .2rem .5rem; border-radius: .3rem; font-size: .8rem;
+    border: 1px solid var(--pico-muted-border-color); text-decoration: none; }
+  .qf.active { font-weight: 700; }
+
+  table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+  th { text-align: left; padding: .45rem .6rem;
+    border-bottom: 2px solid var(--pico-muted-border-color);
+    font-size: .77rem; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+  td { padding: .4rem .6rem; border-bottom: 1px solid var(--pico-muted-border-color); vertical-align: top; }
+  tr:hover td { background: var(--pico-card-background-color, #f9f9f9); }
+
+  .msg-col   { max-width: 220px; word-break: break-word; font-size: .82rem; }
+  .ans-col   { max-width: 280px; word-break: break-word; font-size: .8rem; color: #374151; }
+  .issues-col{ max-width: 200px; font-size: .75rem; color: #6b7280; word-break: break-word; }
+  .cands-col { font-size: .74rem; color: #374151; max-width: 200px; word-break: break-word; }
+  .reason-col{ max-width: 200px; font-size: .76rem; color: #4b5563; word-break: break-word; }
+  .ts-col    { font-size: .74rem; color: #6b7280; white-space: nowrap; }
+
+  details.ans-toggle summary { cursor: pointer; font-size: .78rem; color: var(--pico-primary); }
+  details.ans-toggle pre { white-space: pre-wrap; word-break: break-word;
+    background: var(--pico-card-background-color, #f9f9f9);
+    border-radius: .3rem; padding: .4rem .5rem; font-size: .75rem;
+    margin: .2rem 0 0 0; }
+  .revised-note { font-size: .72rem; color: #1d4ed8; font-style: italic; }
+  .empty { padding: 2rem; text-align: center; color: var(--pico-muted-color); }
+</style>
+
+<h2>Response Traces</h2>
+<p style="font-size:.85rem;color:var(--pico-muted-color);margin-top:-.5rem">
+  One row per chat turn. Shows whether the draft answer was approved, revised, or blocked.
+  Commit candidates are durable lessons surfaced for the Memory Commit Pipeline.
+</p>
+
+{%- set verdicts = [
+  ('approved','v-approved'),
+  ('needs_caveat','v-needs_caveat'),
+  ('needs_revision','v-needs_revision'),
+  ('needs_verification','v-needs_verification'),
+  ('blocked','v-blocked'),
+] -%}
+
+<div class="quick-filters">
+  <a href="/response_traces" class="qf{{ ' active' if not verdict_filter }}">
+    All ({{ traces|length }})
+  </a>
+  {% for v, cls in verdicts %}
+    {%- set cnt = traces | selectattr('verdict', 'equalto', v) | list | length
+        if not verdict_filter else (traces|length if verdict_filter == v else 0) -%}
+    {% if cnt or verdict_filter == v %}
+    <a href="/response_traces?verdict={{ v }}"
+       class="qf {{ cls }}{{ ' active' if verdict_filter == v }}">
+      {{ v }} ({{ cnt }})
+    </a>
+    {% endif %}
+  {% endfor %}
+</div>
+
+{% if not traces %}
+<div class="empty">
+  No response traces yet. They are written after every chat turn once the evaluator runs.
+</div>
+{% else %}
+<div style="overflow-x:auto">
+<table>
+  <thead>
+    <tr>
+      <th>User message</th>
+      <th>Verdict</th>
+      <th>Overstatement</th>
+      <th>Action OK?</th>
+      <th>Answer</th>
+      <th>Issues</th>
+      <th>Commit candidates</th>
+      <th>Reasoning</th>
+      <th>When</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for t in traces %}
+  <tr>
+    <td class="msg-col">
+      {{ t.user_message[:140] if t.user_message else '—' }}
+      {%- if t.user_message and t.user_message|length > 140 %}…{% endif %}
+    </td>
+    <td>
+      <span class="verdict-badge v-{{ t.verdict }}">{{ t.verdict }}</span>
+    </td>
+    <td>
+      {% if t.overstatement_risk %}
+      <span class="risk-badge risk-{{ t.overstatement_risk }}">{{ t.overstatement_risk }}</span>
+      {% else %}—{% endif %}
+    </td>
+    <td style="text-align:center">
+      {% if t.action_followed is not none %}
+        {{ '✓' if t.action_followed else '✗' }}
+      {% else %}—{% endif %}
+    </td>
+    <td class="ans-col">
+      {%- set was_revised = t.draft_answer and t.final_answer and t.draft_answer != t.final_answer -%}
+      {% if was_revised %}
+      <span class="revised-note">↻ revised</span><br>
+      {% endif %}
+      <details class="ans-toggle">
+        <summary>{{ (t.final_answer or t.draft_answer or '')[:60] }}{% if (t.final_answer or '')|length > 60 %}…{% endif %}</summary>
+        {% if was_revised %}
+        <strong style="font-size:.72rem">Draft:</strong>
+        <pre>{{ t.draft_answer[:600] }}</pre>
+        <strong style="font-size:.72rem">Final:</strong>
+        {% endif %}
+        <pre>{{ (t.final_answer or t.draft_answer or '')[:800] }}</pre>
+      </details>
+    </td>
+    <td class="issues-col">
+      {% if t.issues %}
+        {% for issue in t.issues[:3] %}
+          <span>{{ issue.type }}{% if issue.severity %} ({{ issue.severity }}){% endif %}</span>
+          {% if not loop.last %}<br>{% endif %}
+        {% endfor %}
+        {% if t.issues|length > 3 %}
+          <br><span style="color:#9ca3af">+{{ t.issues|length - 3 }} more</span>
+        {% endif %}
+      {% else %}
+        <span style="color:#9ca3af">—</span>
+      {% endif %}
+    </td>
+    <td class="cands-col">
+      {% if t.commit_candidates %}
+        <ul style="margin:0;padding:0;list-style:none">
+        {% for c in t.commit_candidates[:3] %}
+          <li style="font-size:.72rem;margin-bottom:.15rem">{{ c[:100] }}{% if c|length > 100 %}…{% endif %}</li>
+        {% endfor %}
+        </ul>
+        {% if t.commit_candidates|length > 3 %}
+          <span style="font-size:.7rem;color:#9ca3af">+{{ t.commit_candidates|length - 3 }} more</span>
+        {% endif %}
+      {% else %}
+        <span style="color:#9ca3af">—</span>
+      {% endif %}
+    </td>
+    <td class="reason-col">{{ t.reasoning or '—' }}</td>
+    <td class="ts-col">{{ t.created_at[:16] if t.created_at else '—' }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

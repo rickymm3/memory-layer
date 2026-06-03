@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+{% block title %}Prompt Detail{% endblock %}
+
+{% block content %}
+<style>
+  .verdict-badge {
+    display: inline-block; padding: .2rem .55rem;
+    border-radius: .3rem; font-size: .8rem; font-weight: 600;
+  }
+  .v-approved            { background: #dcfce7; color: #166534; }
+  .v-needs_caveat        { background: #fef9c3; color: #854d0e; }
+  .v-needs_revision      { background: #ffedd5; color: #9a3412; }
+  .v-needs_verification  { background: #dbeafe; color: #1e40af; }
+  .v-blocked             { background: #fee2e2; color: #991b1b; }
+
+  .ctx-badge {
+    display: inline-block; padding: .15rem .4rem;
+    border-radius: .25rem; font-size: .78rem; font-weight: 600;
+  }
+  .ctx-sufficient   { background: #dcfce7; color: #166534; }
+  .ctx-insufficient { background: #ffedd5; color: #9a3412; }
+  .ctx-stale        { background: #fef9c3; color: #713f12; }
+  .ctx-conflicting  { background: #fee2e2; color: #991b1b; }
+  .ctx-unsupported  { background: #f3f4f6; color: #374151; }
+  .ctx-needs_verification { background: #dbeafe; color: #1e40af; }
+  .ctx-needs_user_clarification { background: #ede9fe; color: #5b21b6; }
+  .ctx-unsafe_or_blocked { background: #fee2e2; color: #991b1b; }
+
+  .atom-card {
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: .4rem;
+    padding: .7rem .9rem;
+    margin-bottom: .5rem;
+    font-size: .85rem;
+  }
+  .atom-card.used     { border-left: 4px solid #16a34a; }
+  .atom-card.ignored  { border-left: 4px solid #9ca3af; opacity: .75; }
+  .atom-card.other    { border-left: 4px solid #93c5fd; }
+
+  .atom-meta { font-size: .73rem; color: #6b7280; margin-top: .25rem; }
+  .atom-content { font-size: .84rem; color: #111827; line-height: 1.5; }
+
+  .section-label {
+    font-size: .75rem; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--pico-muted-color);
+    margin: 1.5rem 0 .5rem;
+  }
+
+  .prompt-box, .answer-box {
+    background: var(--pico-card-background-color, #f9fafb);
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: .4rem;
+    padding: .9rem 1rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: .88rem;
+    line-height: 1.6;
+  }
+  .prompt-box { border-left: 4px solid #6366f1; }
+  .answer-box { border-left: 4px solid #0ea5e9; }
+
+  .meta-row { display: flex; gap: 1.5rem; flex-wrap: wrap; font-size: .83rem;
+    margin-bottom: 1rem; align-items: center; }
+  .meta-item label { font-size: .72rem; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: #9ca3af; display: block; }
+
+  .empty-atoms { color: var(--pico-muted-color); font-size: .85rem;
+    font-style: italic; padding: .5rem 0; }
+
+  .back-link { font-size: .84rem; margin-bottom: 1rem; display: inline-block; }
+
+  details summary { cursor: pointer; font-size: .82rem; color: var(--pico-primary);
+    padding: .3rem 0; }
+  details pre { white-space: pre-wrap; word-break: break-word; font-size: .78rem;
+    background: var(--pico-card-background-color, #f9fafb);
+    border-radius: .3rem; padding: .5rem .7rem; margin: .3rem 0; }
+</style>
+
+<a class="back-link" href="/prompt_history">← Prompt History</a>
+
+<h2 style="margin-bottom:.3rem">Prompt Detail</h2>
+<p class="ts-col" style="font-size:.8rem;color:#6b7280;margin-top:0">{{ turn.created_at }}</p>
+
+<!-- Meta row -->
+<div class="meta-row">
+  <div class="meta-item">
+    <label>Verdict</label>
+    <span class="verdict-badge v-{{ turn.verdict }}">{{ turn.verdict.replace('_', ' ') }}</span>
+  </div>
+  {% if turn.context_status and turn.context_status != '—' %}
+  <div class="meta-item">
+    <label>Context status</label>
+    <span class="ctx-badge ctx-{{ turn.context_status }}">{{ turn.context_status.replace('_', ' ') }}</span>
+  </div>
+  {% endif %}
+  {% if turn.final_action and turn.final_action != '—' %}
+  <div class="meta-item">
+    <label>Action taken</label>
+    {{ turn.final_action.replace('_', ' ') }}
+  </div>
+  {% endif %}
+  {% if turn.ctx_confidence is not none %}
+  <div class="meta-item">
+    <label>Context confidence</label>
+    {{ turn.ctx_confidence }}
+  </div>
+  {% endif %}
+  <div class="meta-item">
+    <label>Atoms used / retrieved</label>
+    {{ turn.used_atoms|length }} / {{ (turn.used_atoms|length) + (turn.ignored_atoms|length) + (turn.other_atoms|length) }}
+  </div>
+</div>
+
+<!-- Prompt -->
+<div class="section-label">Prompt</div>
+<div class="prompt-box">{{ turn.user_message }}</div>
+
+<!-- Retrieved memory context -->
+<div class="section-label">
+  Retrieved memory context
+  <span style="font-size:.8rem;font-weight:400;text-transform:none;letter-spacing:0;margin-left:.4rem">
+    — injected into the LLM's context window before answering
+  </span>
+</div>
+
+{% set total_atoms = (turn.used_atoms|length) + (turn.ignored_atoms|length) + (turn.other_atoms|length) %}
+{% if total_atoms == 0 %}
+  <p class="empty-atoms">No memory atoms were retrieved for this turn.</p>
+{% else %}
+  {% if turn.used_atoms %}
+    <p style="font-size:.78rem;color:#166534;font-weight:600;margin-bottom:.3rem">
+      ✓ Used ({{ turn.used_atoms|length }})
+    </p>
+    {% for atom in turn.used_atoms %}
+    <div class="atom-card used">
+      <div class="atom-content">{{ atom.content }}</div>
+      <div class="atom-meta">
+        <strong>{{ atom.memory_type }}</strong>
+        · scope: {{ atom.scope }}
+        {% if atom.confidence is not none %} · conf {{ atom.confidence }}{% endif %}
+        · <a href="/atom/{{ atom.id }}" style="font-size:.72rem">view atom →</a>
+      </div>
+    </div>
+    {% endfor %}
+  {% endif %}
+
+  {% if turn.ignored_atoms %}
+    <p style="font-size:.78rem;color:#6b7280;font-weight:600;margin:.8rem 0 .3rem">
+      ✗ Retrieved but ignored ({{ turn.ignored_atoms|length }})
+    </p>
+    {% for atom in turn.ignored_atoms %}
+    <div class="atom-card ignored">
+      <div class="atom-content">{{ atom.content }}</div>
+      <div class="atom-meta">
+        <strong>{{ atom.memory_type }}</strong>
+        · scope: {{ atom.scope }}
+        {% if atom.confidence is not none %} · conf {{ atom.confidence }}{% endif %}
+        · <a href="/atom/{{ atom.id }}" style="font-size:.72rem">view atom →</a>
+      </div>
+    </div>
+    {% endfor %}
+  {% endif %}
+
+  {% if turn.other_atoms %}
+    <p style="font-size:.78rem;color:#1d4ed8;font-weight:600;margin:.8rem 0 .3rem">
+      ~ Retrieved ({{ turn.other_atoms|length }})
+    </p>
+    {% for atom in turn.other_atoms %}
+    <div class="atom-card other">
+      <div class="atom-content">{{ atom.content }}</div>
+      <div class="atom-meta">
+        <strong>{{ atom.memory_type }}</strong>
+        · scope: {{ atom.scope }}
+        {% if atom.confidence is not none %} · conf {{ atom.confidence }}{% endif %}
+        · <a href="/atom/{{ atom.id }}" style="font-size:.72rem">view atom →</a>
+      </div>
+    </div>
+    {% endfor %}
+  {% endif %}
+{% endif %}
+
+<!-- Final answer -->
+<div class="section-label">Final answer</div>
+<div class="answer-box">{{ turn.final_answer }}</div>
+
+<!-- Draft (if different) -->
+{% if turn.draft_answer and turn.draft_answer != turn.final_answer %}
+<details style="margin-top:.8rem">
+  <summary>Show draft answer (was revised)</summary>
+  <pre>{{ turn.draft_answer }}</pre>
+</details>
+{% endif %}
+
+<!-- Issues / reasoning -->
+{% if turn.issues %}
+<details style="margin-top:.8rem">
+  <summary>Evaluator issues ({{ turn.issues|length }})</summary>
+  <pre>{{ turn.issues | tojson(indent=2) }}</pre>
+</details>
+{% endif %}
+
+{% if turn.reasoning %}
+<details style="margin-top:.4rem">
+  <summary>Evaluator reasoning</summary>
+  <pre>{{ turn.reasoning }}</pre>
+</details>
+{% endif %}
+
+{% if turn.ctx_issues %}
+<details style="margin-top:.4rem">
+  <summary>Context evaluator issues</summary>
+  <pre>{{ turn.ctx_issues | tojson(indent=2) }}</pre>
+</details>
+{% endif %}
+
+{% if turn.commit_candidates %}
+<details style="margin-top:.4rem">
+  <summary>Commit candidates surfaced ({{ turn.commit_candidates|length }})</summary>
+  <pre>{{ turn.commit_candidates | tojson(indent=2) }}</pre>
+</details>
+{% endif %}
+
+{% endblock %}

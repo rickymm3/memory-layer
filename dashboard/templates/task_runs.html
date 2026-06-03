@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Task Runs{% endblock %}
+{% block content %}
+<h2>Task Runs <small style="font-size:.6em;color:var(--pico-muted-color)">{{ runs|length }} shown</small></h2>
+<p style="font-size:.9em;color:var(--pico-muted-color);margin-top:-.5rem">
+  One row per <code>reflect_task.py --store</code> invocation. Each run links to the lessons it stored.
+</p>
+
+<form method="get" action="/task_runs">
+  <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end">
+    <label style="flex:1;min-width:160px">
+      Scope
+      <select name="scope">
+        <option value="">— all —</option>
+        {% for s in scopes %}
+          <option value="{{ s }}" {% if s == scope_filter %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label style="flex:0 0 160px">
+      Outcome
+      <select name="outcome">
+        <option value="">— all —</option>
+        <option value="success"  {% if outcome_filter == 'success'  %}selected{% endif %}>success</option>
+        <option value="partial"  {% if outcome_filter == 'partial'  %}selected{% endif %}>partial</option>
+        <option value="failed"   {% if outcome_filter == 'failed'   %}selected{% endif %}>failed</option>
+      </select>
+    </label>
+    <div style="padding-bottom:.1rem">
+      <button type="submit">Filter</button>
+      <a href="/task_runs" role="button" class="secondary" style="margin-left:.4rem">Reset</a>
+    </div>
+  </div>
+</form>
+
+{% if runs %}
+<div style="overflow-x:auto">
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Scope</th>
+      <th>Task</th>
+      <th>Model</th>
+      <th>Outcome</th>
+      <th>Lessons</th>
+      <th>Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in runs %}
+    <tr>
+      <td><a href="/task_run/{{ r.id }}" class="monospace">{{ r.id_short }}</a></td>
+      <td><span class="monospace">{{ r.scope }}</span></td>
+      <td class="truncate" style="max-width:320px" title="{{ r.task_description }}">{{ r.task_description }}</td>
+      <td><span class="monospace" style="font-size:.8em">{{ r.model_used }}</span></td>
+      <td>
+        {% if r.outcome == 'success' %}
+          <span class="badge badge-new">success</span>
+        {% elif r.outcome == 'partial' %}
+          <span class="badge badge-refinement">partial</span>
+        {% else %}
+          <span class="badge badge-conflict">failed</span>
+        {% endif %}
+      </td>
+      <td><strong>{{ r.lessons_stored }}</strong></td>
+      <td><span class="monospace">{{ r.created_at }}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p>No task runs found. Run <code>make reflect ARGS="... --store"</code> to create one.</p>
+{% endif %}
+{% endblock %}

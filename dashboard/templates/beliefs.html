@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Beliefs{% endblock %}
+{% block content %}
+<h2>Beliefs &amp; Opinions
+  <small style="font-size:.6em;color:var(--pico-muted-color)">opinion · preference · belief · instruction · decision · correction · warning</small>
+</h2>
+
+<form method="get" style="display:flex;gap:.75rem;flex-wrap:wrap;margin-bottom:1rem;align-items:flex-end">
+  <label style="flex:1;min-width:140px">
+    <small>Scope</small>
+    <select name="scope">
+      <option value="">All scopes</option>
+      {% for s in scopes %}
+      <option value="{{ s }}" {% if s == scope_filter %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label style="flex:1;min-width:140px">
+    <small>Type</small>
+    <select name="type">
+      <option value="">All revisable types</option>
+      {% for t in revisable_types %}
+      <option value="{{ t }}" {% if t == type_filter %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit" style="margin-bottom:0">Filter</button>
+  {% if scope_filter or type_filter %}
+  <a href="/beliefs" role="button" class="secondary outline" style="margin-bottom:0;white-space:nowrap">Clear</a>
+  {% endif %}
+</form>
+
+{% if atoms %}
+<p style="font-size:.88rem;color:var(--pico-muted-color)">
+  {{ atoms|length }} belief{{ 's' if atoms|length != 1 }} — sorted by revision activity.
+</p>
+<div style="overflow-x:auto">
+<table>
+  <thead>
+    <tr>
+      <th>Content</th>
+      <th>Type</th>
+      <th>Scope</th>
+      <th>Confidence</th>
+      <th>Status</th>
+      <th>Revisions</th>
+      <th>Disagree</th>
+      <th>Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in atoms %}
+    <tr class="{% if a.lifecycle_status not in ('active',) %}lifecycle-inactive-row{% endif %}">
+      <td class="truncate">
+        <a href="/atom/{{ a.id }}">{{ a.content }}</a>
+      </td>
+      <td><span class="badge badge-{{ a.memory_type }}">{{ a.memory_type }}</span></td>
+      <td><span class="monospace">{{ a.scope }}</span></td>
+      <td>
+        <span class="{% if a.confidence >= 0.75 %}conf-high{% elif a.confidence >= 0.5 %}conf-mid{% else %}conf-low{% endif %}">{{ a.confidence }}</span>
+        <div style="width:44px;height:4px;background:#e5e7eb;border-radius:2px;margin-top:3px">
+          <div style="width:{{ (a.confidence * 100) | int }}%;height:4px;background:{% if a.confidence >= 0.75 %}#16a34a{% elif a.confidence >= 0.5 %}#f59e0b{% else %}#ef4444{% endif %};border-radius:2px"></div>
+        </div>
+      </td>
+      <td><span class="lifecycle-{{ a.lifecycle_status }}">{{ a.lifecycle_status }}</span></td>
+      <td>
+        {% if a.revision_count > 0 %}
+        <span style="color:#7c3aed;font-weight:600">{{ a.revision_count }}</span>
+        {% else %}
+        <span style="color:var(--pico-muted-color)">0</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if a.disagreement_score > 0.4 %}
+        <span class="conf-low"><strong>{{ a.disagreement_score }}</strong> ⚠️</span>
+        {% else %}
+        <span style="color:var(--pico-muted-color)">{{ a.disagreement_score }}</span>
+        {% endif %}
+      </td>
+      <td><span class="monospace">{{ a.created_at }}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p style="color:var(--pico-muted-color)">No beliefs or opinions stored yet.</p>
+{% endif %}
+{% endblock %}

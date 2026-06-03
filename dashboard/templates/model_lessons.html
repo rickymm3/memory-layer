@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Model Lessons{% endblock %}
+
+{% block content %}
+<hgroup>
+  <h2>Model Lessons</h2>
+  <p>{{ total }} atom{{ 's' if total != 1 else '' }} across {{ by_scope|length }} model scope{{ 's' if by_scope|length != 1 else '' }}{% if not include_inactive %} — active only{% else %} — all lifecycle statuses{% endif %}</p>
+</hgroup>
+
+{# Filter bar #}
+<form method="get" action="/model_lessons" style="margin-bottom:1.5rem">
+  <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end">
+    <label style="flex:0 0 auto">
+      Model
+      <select name="model" style="min-width:160px">
+        <option value="">— all —</option>
+        {% for m in model_scopes %}
+        <option value="{{ m }}" {% if model_filter == m %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label style="flex:0 0 auto;display:flex;align-items:center;gap:.4rem;margin-bottom:.2rem">
+      <input type="checkbox" name="include_inactive" value="1" {% if include_inactive %}checked{% endif %} style="width:auto;margin:0">
+      Include non-active
+    </label>
+    <button type="submit" style="flex:0 0 auto">Filter</button>
+    {% if model_filter or include_inactive %}
+    <a href="/model_lessons" role="button" class="secondary outline" style="flex:0 0 auto">Clear</a>
+    {% endif %}
+  </div>
+</form>
+
+{% if not by_scope %}
+<p><em>No atoms found{% if model_filter %} for model:{{ model_filter }}{% endif %}.</em></p>
+{% else %}
+
+{% for scope in by_scope.keys()|sort %}
+{% set cats = by_scope[scope] %}
+{% set scope_total = namespace(n=0) %}
+{% for cat in category_order %}{% set scope_total.n = scope_total.n + cats[cat]|length %}{% endfor %}
+
+<article style="margin-bottom:2rem">
+  <header>
+    <strong>{{ scope }}</strong>
+    <span class="monospace" style="margin-left:.75rem;font-size:.85em">{{ scope_total.n }} atom{{ 's' if scope_total.n != 1 else '' }}</span>
+  </header>
+
+  {% for cat in category_order %}
+  {% set atoms = cats[cat] %}
+  {% if atoms %}
+  <section style="margin-bottom:1rem">
+    <h6 style="margin-bottom:.5rem;color:var(--pico-muted-color);text-transform:uppercase;font-size:.72em;letter-spacing:.07em">{{ cat }}</h6>
+    <table>
+      <thead>
+        <tr>
+          <th>Content</th>
+          <th>Type</th>
+          <th>Conf</th>
+          <th>Imp</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in atoms %}
+        <tr {% if a.lifecycle_status != 'active' %}class="lifecycle-inactive-row"{% endif %}>
+          <td>
+            <a href="/atom/{{ a.id }}" class="monospace" style="font-size:.78em;margin-right:.4rem">{{ a.id_short }}</a>
+            {{ a.content }}
+          </td>
+          <td><span class="badge badge-{{ a.memory_type }}">{{ a.memory_type or '—' }}</span></td>
+          <td class="{% if a.confidence is not none %}{% if a.confidence >= 0.7 %}conf-high{% elif a.confidence >= 0.5 %}conf-mid{% else %}conf-low{% endif %}{% endif %}">
+            {{ '%.2f'|format(a.confidence) if a.confidence is not none else '—' }}
+          </td>
+          <td>{{ '%.2f'|format(a.importance) if a.importance is not none else '—' }}</td>
+          <td>
+            {% if a.lifecycle_status != 'active' %}
+            <span class="lifecycle-{{ a.lifecycle_status }}">{{ a.lifecycle_status }}</span>
+            {% else %}
+            <span class="lifecycle-active">active</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+  {% endfor %}
+</article>
+{% endfor %}
+
+{% endif %}
+{% endblock %}

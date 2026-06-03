@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}Commit Traces{% endblock %}
+
+{% block content %}
+<style>
+  .filter-bar { display: flex; gap: .5rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+  .filter-bar label { font-size: .85rem; margin: 0; }
+  .filter-bar select { font-size: .85rem; padding: .3rem .5rem; border-radius: .3rem;
+    border: 1px solid var(--pico-muted-border-color); background: var(--pico-background-color); }
+  .filter-bar a { font-size: .82rem; }
+
+  .decision-badge {
+    display: inline-block;
+    padding: .15rem .45rem;
+    border-radius: .3rem;
+    font-size: .75rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .d-commit           { background: #dcfce7; color: #166534; }
+  .d-refine_existing  { background: #dbeafe; color: #1e40af; }
+  .d-supersede_existing { background: #ede9fe; color: #5b21b6; }
+  .d-reinforce_existing { background: #e0f2fe; color: #0369a1; }
+  .d-mark_conflict    { background: #fef3c7; color: #92400e; }
+  .d-propose_for_review { background: #fff7ed; color: #9a3412; }
+  .d-reject           { background: #fee2e2; color: #991b1b; }
+
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th { text-align: left; padding: .45rem .6rem; border-bottom: 2px solid var(--pico-muted-border-color);
+    font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+  td { padding: .4rem .6rem; border-bottom: 1px solid var(--pico-muted-border-color); vertical-align: top; }
+  tr:hover td { background: var(--pico-card-background-color, #f9f9f9); }
+
+  .text-col { max-width: 260px; word-break: break-word; }
+  .final-col { max-width: 240px; word-break: break-word; color: #374151; }
+  .notes-col { max-width: 200px; font-size: .77rem; color: #6b7280; word-break: break-word; }
+  .ts-col { font-size: .75rem; color: #6b7280; white-space: nowrap; }
+  .atom-link { font-size: .78rem; font-family: monospace; }
+  .sup-ids { font-size: .73rem; color: #6b7280; }
+
+  .empty { padding: 2rem; text-align: center; color: var(--pico-muted-color); }
+
+  .decision-counts {
+    display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1.1rem;
+  }
+  .dc-item {
+    padding: .2rem .55rem; border-radius: .3rem; font-size: .8rem;
+    border: 1px solid var(--pico-muted-border-color); cursor: pointer; text-decoration: none;
+  }
+  .dc-item.active { font-weight: 700; }
+</style>
+
+<h2>Memory Commit Traces</h2>
+<p style="font-size:.85rem;color:var(--pico-muted-color);margin-top:-.5rem">
+  One row per candidate that passed through the commit pipeline. Includes rejected and proposed entries.
+</p>
+
+<!-- Quick-filter links by decision -->
+{%- set all_decisions = [
+    ('commit','d-commit'),
+    ('refine_existing','d-refine_existing'),
+    ('supersede_existing','d-supersede_existing'),
+    ('reinforce_existing','d-reinforce_existing'),
+    ('mark_conflict','d-mark_conflict'),
+    ('propose_for_review','d-propose_for_review'),
+    ('reject','d-reject')
+] -%}
+<div class="decision-counts">
+  <a href="/commits" class="dc-item{{ ' active' if not decision_filter }}">All ({{ traces | length }})</a>
+  {% for d, cls in all_decisions %}
+    {%- set cnt = traces | selectattr('decision', 'equalto', d) | list | length if not decision_filter else (traces | length if decision_filter == d else 0) -%}
+    {% if cnt or decision_filter == d %}
+    <a href="/commits?decision={{ d }}" class="dc-item {{ cls }}{{ ' active' if decision_filter == d }}">{{ d }} ({{ cnt }})</a>
+    {% endif %}
+  {% endfor %}
+</div>
+
+{% if not traces %}
+<div class="empty">No commit traces yet. Traces are written every time the commit pipeline runs.</div>
+{% else %}
+<div style="overflow-x:auto">
+<table>
+  <thead>
+    <tr>
+      <th>Decision</th>
+      <th>Candidate</th>
+      <th>Final memory text</th>
+      <th>Type · Scope</th>
+      <th>Conf.</th>
+      <th>Linked atoms</th>
+      <th>Critic notes</th>
+      <th>When</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for t in traces %}
+  <tr>
+    <td>
+      <span class="decision-badge d-{{ t.decision }}">{{ t.decision }}</span>
+      {% if t.rejection_reason %}
+      <br><span style="font-size:.72rem;color:#6b7280">{{ t.rejection_reason }}</span>
+      {% endif %}
+    </td>
+    <td class="text-col">{{ t.candidate_text[:160] }}{% if t.candidate_text | length > 160 %}…{% endif %}</td>
+    <td class="final-col">
+      {% if t.final_memory_text %}
+        {% if t.committed_atom_id %}
+          <a href="/atom/{{ t.committed_atom_id }}" class="atom-link">{{ t.final_memory_text[:130] }}{% if t.final_memory_text | length > 130 %}…{% endif %}</a>
+        {% else %}
+          {{ t.final_memory_text[:130] }}{% if t.final_memory_text | length > 130 %}…{% endif %}
+        {% endif %}
+      {% else %}
+        <span style="color:#6b7280">—</span>
+      {% endif %}
+    </td>
+    <td>
+      {% if t.memory_type %}<span style="font-size:.77rem">{{ t.memory_type }}</span>{% endif %}
+      {% if t.scope %}<br><span style="font-size:.73rem;color:#6b7280">{{ t.scope }}</span>{% endif %}
+    </td>
+    <td style="text-align:right">
+      {% if t.confidence is not none %}{{ "%.2f" | format(t.confidence) }}{% else %}—{% endif %}
+    </td>
+    <td>
+      {% if t.reinforces_atom_ids %}
+        <span style="font-size:.72rem;color:#0369a1">↑ reinforces</span>
+        {% for aid in t.reinforces_atom_ids %}
+          <br><a href="/atom/{{ aid }}" class="atom-link">{{ aid[:8] }}</a>
+        {% endfor %}
+      {% endif %}
+      {% if t.supersedes_atom_ids %}
+        <span style="font-size:.72rem;color:#5b21b6">↪ superseded</span>
+        {% for aid in t.supersedes_atom_ids %}
+          <br><a href="/atom/{{ aid }}" class="atom-link sup-ids">{{ aid[:8] }}</a>
+        {% endfor %}
+      {% endif %}
+      {% if t.refines_atom_ids and not t.supersedes_atom_ids %}
+        <span style="font-size:.72rem;color:#1e40af">~ refines</span>
+        {% for aid in t.refines_atom_ids %}
+          <br><a href="/atom/{{ aid }}" class="atom-link">{{ aid[:8] }}</a>
+        {% endfor %}
+      {% endif %}
+      {% if t.conflicts_with_atom_ids %}
+        <span style="font-size:.72rem;color:#92400e">⚡ conflicts</span>
+        {% for aid in t.conflicts_with_atom_ids %}
+          <br><a href="/atom/{{ aid }}" class="atom-link">{{ aid[:8] }}</a>
+        {% endfor %}
+      {% endif %}
+      {% if not t.reinforces_atom_ids and not t.supersedes_atom_ids
+            and not t.refines_atom_ids and not t.conflicts_with_atom_ids %}
+        <span style="color:#9ca3af">—</span>
+      {% endif %}
+    </td>
+    <td class="notes-col">
+      {% if t.critic_notes %}
+        {{ t.critic_notes | join(' · ') | truncate(140, true, '…') }}
+      {% else %}
+        <span style="color:#9ca3af">—</span>
+      {% endif %}
+    </td>
+    <td class="ts-col">{{ t.created_at[:16] if t.created_at else '—' }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

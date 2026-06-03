@@ -1,0 +1,43 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: memory-layer-db
+    environment:
+      POSTGRES_USER: memory
+      POSTGRES_PASSWORD: memory_dev_password
+      POSTGRES_DB: memory_layer_development
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memory -d memory_layer_development"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mcp:
+    build: .
+    container_name: memory-layer-mcp
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://memory:memory_dev_password@db:5432/memory_layer_development
+      CHAT_PROVIDER: ${CHAT_PROVIDER:-auto}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_COMPAT_BASE_URL: ${OPENAI_COMPAT_BASE_URL:-}
+      OPENAI_COMPAT_API_KEY: ${OPENAI_COMPAT_API_KEY:-none}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-auto}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      CHAT_MODEL: ${CHAT_MODEL:-qwen3:8b}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3-embedding:latest}
+    ports:
+      - "8765:8765"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  postgres_data:

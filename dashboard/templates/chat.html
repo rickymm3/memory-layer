@@ -1,0 +1,323 @@
+{% extends "base.html" %}
+{% block title %}Chat{% endblock %}
+{% block body_class %}chat-page{% endblock %}
+
+{% block content %}
+<style>
+  /* Full-height chat layout */
+  body.chat-page { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+  body.chat-page > header { flex-shrink: 0; }
+  body.chat-page > main  { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
+  body.chat-page > footer { flex-shrink: 0; }
+
+  .chat-outer { flex: 1; display: flex; flex-direction: column; overflow: hidden; max-width: 820px; width: 100%; margin: 0 auto; padding: 0 .5rem; }
+
+  /* Message window */
+  #chat-window {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem 0 .5rem;
+    display: flex;
+    flex-direction: column;
+    gap: .85rem;
+    scroll-behavior: smooth;
+  }
+
+  .msg { display: flex; gap: .55rem; align-items: flex-start; max-width: 88%; }
+  .msg.user      { align-self: flex-end;   flex-direction: row-reverse; }
+  .msg.assistant { align-self: flex-start; }
+
+  .avatar {
+    width: 1.9rem; height: 1.9rem; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .85rem; flex-shrink: 0;
+    background: var(--pico-muted-background);
+    border: 1px solid var(--pico-muted-border-color, #ddd);
+  }
+
+  .bubble {
+    padding: .6rem .9rem;
+    border-radius: 1.1rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: .93rem;
+  }
+  .msg.user      .bubble { background: var(--pico-primary); color: #fff; border-bottom-right-radius: .25rem; }
+  .msg.assistant .bubble { background: var(--pico-card-background-color, #f7f7f7); border: 1px solid var(--pico-muted-border-color, #e0e0e0); border-bottom-left-radius: .25rem; }
+
+  /* Memories disclosure */
+  .memories-toggle {
+    font-size: .75rem;
+    margin-top: .35rem;
+    margin-left: .1rem;
+    color: var(--pico-muted-color);
+  }
+  .memories-toggle summary { cursor: pointer; display: inline-block; }
+  .memories-toggle summary:hover { color: var(--pico-primary); }
+  .memories-toggle ul { margin: .3rem 0 0 .4rem; padding: 0; list-style: none; display: flex; flex-direction: column; gap: .2rem; }
+  .memories-toggle li { font-size: .78rem; }
+  .memories-toggle .sim { opacity: .55; font-variant-numeric: tabular-nums; }
+
+  /* Write events disclosure */
+  .write-events-toggle {
+    font-size: .75rem;
+    margin-top: .25rem;
+    margin-left: .1rem;
+    color: var(--pico-muted-color);
+  }
+  .write-events-toggle summary { cursor: pointer; display: inline-block; }
+  .write-events-toggle summary:hover { color: var(--pico-primary); }
+  .write-events-toggle ul { margin: .3rem 0 0 .4rem; padding: 0; list-style: none; display: flex; flex-direction: column; gap: .2rem; }
+  .write-events-toggle li { font-size: .78rem; }
+  .we-stored { color: #166534; }
+  .we-proposed { color: #92400e; }
+  .we-reinforced { color: #1e40af; }
+  .we-superseded { color: #6b7280; font-size: .74rem; }
+
+  /* Context evaluation badge */
+  .ctx-badge {
+    display: inline-flex; align-items: center; gap: .3rem;
+    font-size: .74rem; margin-top: .25rem; padding: .15rem .4rem;
+    border-radius: .3rem; border: 1px solid var(--pico-muted-border-color);
+  }
+  .ctx-sufficient    { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
+  .ctx-insufficient  { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+  .ctx-conflicting   { background: #fefce8; color: #92400e; border-color: #fde68a; }
+  .ctx-stale         { background: #fff7ed; color: #9a3412; border-color: #fed7aa; }
+  .ctx-unsupported   { background: #f5f3ff; color: #5b21b6; border-color: #ddd6fe; }
+  .ctx-needs_verification { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
+  .ctx-needs_user_clarification { background: #f0f9ff; color: #0c4a6e; border-color: #bae6fd; }
+  .ctx-unsafe_or_blocked { background: #fef2f2; color: #7f1d1d; border-color: #fca5a5; }
+
+  /* Web research indicator */
+  .research-badge {
+    font-size: .75rem;
+    margin-top: .25rem;
+    margin-left: .1rem;
+    padding: .15rem .45rem;
+    border-radius: .35rem;
+    display: inline-block;
+  }
+  .research-badge.research-used {
+    background: #eff6ff;
+    color: #1e40af;
+    border: 1px solid #bfdbfe;
+  }
+  .research-badge.research-unavailable {
+    background: #fefce8;
+    color: #854d0e;
+    border: 1px solid #fde68a;
+  }
+
+  /* Gap resolution badge */
+  .gap-badge {
+    font-size: .75rem;
+    margin-top: .25rem;
+    margin-left: .1rem;
+    padding: .15rem .45rem;
+    border-radius: .35rem;
+    display: inline-block;
+  }
+  .gap-badge.gap-resolved {
+    background: #f0fdf4;
+    color: #166534;
+    border: 1px solid #bbf7d0;
+  }
+  .gap-badge.gap-needs_human {
+    background: #fff7ed;
+    color: #9a3412;
+    border: 1px solid #fed7aa;
+  }
+
+  /* Routing path badge */
+  .route-badge {
+    font-size: .72rem; font-weight: 600;
+    margin-top: .2rem; margin-left: .1rem;
+    padding: .12rem .4rem;
+    border-radius: .3rem; display: inline-block;
+  }
+  .route-direct    { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+  .route-context   { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+  .route-recursive { background: #fef9c3; color: #854d0e; border: 1px solid #fde68a; }
+
+  /* Input area */
+  .input-area {
+    flex-shrink: 0;
+    border-top: 1px solid var(--pico-muted-border-color, #e0e0e0);
+    padding: .75rem .5rem .85rem;
+    background: var(--pico-background-color, #fff);
+    max-width: 820px; width: 100%; margin: 0 auto;
+  }
+  .input-row {
+    display: flex;
+    flex-direction: row;
+    gap: .5rem;
+    align-items: flex-end;
+  }
+  /* Pico sets width:100% on all inputs/buttons — override so flex sizing works */
+  .input-row textarea {
+    flex: 1 1 0% !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    resize: none;
+    min-height: 52px;
+    max-height: 180px;
+    font-size: .95rem;
+    line-height: 1.45;
+    padding: .65rem .85rem;
+    margin: 0 !important;
+    box-sizing: border-box;
+  }
+  .input-row button[type=submit] {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    height: 52px;
+    white-space: nowrap;
+    padding: 0 1.6rem;
+    margin: 0 !important;
+  }
+  .clear-btn { font-size: .78rem; color: var(--pico-muted-color); background: none; border: none; cursor: pointer; padding: .2rem .4rem; margin-top: .3rem; }
+  .clear-btn:hover { color: #991b1b; }
+
+  /* Error */
+  .chat-error { background: #fff1f2; border-left: 3px solid #991b1b; padding: .5rem .75rem; border-radius: .4rem; font-size: .88rem; color: #991b1b; }
+
+  /* Empty state */
+  .empty-state { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--pico-muted-color); font-size: .95rem; text-align: center; }
+</style>
+
+<div class="chat-outer">
+  <div id="chat-window">
+    {% if not history %}
+    <div class="empty-state">
+      <div>
+        <div style="font-size:2rem;margin-bottom:.5rem">🧠</div>
+        <div>Ask a question. Retrieved memories are used as context.</div>
+        <div style="font-size:.82rem;margin-top:.3rem">Shift+Enter for newline · Enter to send</div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% for msg in history %}
+      {% if msg.role == "user" %}
+      <div class="msg user">
+        <div class="avatar">🙂</div>
+        <div><div class="bubble">{{ msg.content }}</div></div>
+      </div>
+      {% else %}
+      <div class="msg assistant">
+        <div class="avatar">🤖</div>
+        <div>
+          <div class="bubble">{{ msg.content }}</div>
+          {% if msg.memories %}
+          <details class="memories-toggle">
+            <summary>{{ msg.memories|length }} memor{{ 'y' if msg.memories|length == 1 else 'ies' }} retrieved</summary>
+            <ul>
+              {% for m in msg.memories %}
+              <li>
+                {% if m.id %}<a href="/atom/{{ m.id }}">{% endif %}
+                {{ m.content[:100] }}{% if m.content|length > 100 %}…{% endif %}
+                {% if m.id %}</a>{% endif %}
+                <span class="badge badge-{{ m.memory_type }}" style="font-size:.7em">{{ m.memory_type }}</span>
+                <span class="sim">{{ "%.2f"|format(m.similarity|float) }}</span>
+              </li>
+              {% endfor %}
+            </ul>
+          </details>
+          {% endif %}
+          {% if msg.research_status == 'used' %}
+          <div class="research-badge research-used">🌐 {{ msg.research_count }} web result{{ 's' if msg.research_count != 1 }} used</div>
+          {% elif msg.research_status == 'provider_unavailable' %}
+          <div class="research-badge research-unavailable">🌐 Web research requested — no provider configured</div>
+          {% endif %}
+          {% if msg.gap_info and (msg.gap_info.searches > 0 or msg.gap_info.status == 'needs_human') %}
+          <div class="gap-badge gap-{{ msg.gap_info.status }}">
+            {%- if msg.gap_info.status == 'needs_human' -%}
+              ❓ Needs clarification
+              {%- if msg.gap_info.clarifying_question %}: {{ msg.gap_info.clarifying_question[:80] }}{% if msg.gap_info.clarifying_question|length > 80 %}…{% endif %}{% endif %}
+            {%- else -%}
+              🔍 {{ msg.gap_info.searches }} gap{{ 's' if msg.gap_info.searches != 1 }} resolved
+            {%- endif -%}
+          </div>
+          {% endif %}
+          {% if msg.context_eval %}
+          {%- set ce = msg.context_eval -%}
+          <div>
+            <span class="ctx-badge ctx-{{ ce.context_status }}">
+              🧭 {{ ce.context_status }} · {{ ce.confidence }} · {{ ce.used_count }} used
+              {%- if ce.ignored_count %} · {{ ce.ignored_count }} ignored{% endif -%}
+              {%- if ce.issues_count %} · {{ ce.issues_count }} issue{{ 's' if ce.issues_count != 1 }}{% endif -%}
+              · <em>{{ ce.final_action }}</em>
+              {%- if ce.trace_id %} · <a href="/context_traces" style="font-size:.7rem">trace</a>{% endif -%}
+            </span>
+          </div>
+          {% endif %}
+          {% if msg.route %}
+          <span class="route-badge route-{{ msg.route }}">{{ msg.route }}</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+    {% endfor %}
+
+    {% if error %}
+    <div class="chat-error">{{ error }}</div>
+    {% endif %}
+  </div>
+
+  <div class="input-area">
+    <form method="post" action="/chat" class="chat-form" autocomplete="off">
+      <div class="input-row">
+        <textarea name="message" id="msg-input" placeholder="Message… (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
+        <button type="submit" id="send-btn">Send</button>
+      </div>
+    </form>
+    {% if history %}
+    <form method="post" action="/chat/clear" style="display:inline">
+      <button type="submit" class="clear-btn">✕ Clear conversation</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+  // Scroll to bottom on load
+  const win = document.getElementById('chat-window');
+  if (win) win.scrollTop = win.scrollHeight;
+
+  const textarea = document.getElementById('msg-input');
+  const sendBtn  = document.getElementById('send-btn');
+  const form     = document.querySelector('.chat-form');
+
+  // Auto-resize textarea
+  function resize() {
+    textarea.style.height = '52px';
+    textarea.style.height = Math.min(textarea.scrollHeight, 180) + 'px';
+  }
+  textarea?.addEventListener('input', resize);
+
+  // Enter = submit, Shift+Enter = newline
+  textarea?.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (this.value.trim()) form.requestSubmit();
+    }
+  });
+
+  // Loading state on submit
+  form?.addEventListener('submit', function(e) {
+    if (!textarea.value.trim()) { e.preventDefault(); return; }
+    sendBtn.disabled = true;
+    sendBtn.textContent = '…';
+    textarea.readOnly = true;
+    // Append a "thinking" bubble so the user has immediate feedback
+    const thinking = document.createElement('div');
+    thinking.className = 'msg assistant';
+    thinking.innerHTML = '<div class="avatar">🤖</div><div><div class="bubble" style="opacity:.45;font-style:italic">Thinking…</div></div>';
+    win.appendChild(thinking);
+    win.scrollTop = win.scrollHeight;
+  });
+</script>
+{% endblock %}
+

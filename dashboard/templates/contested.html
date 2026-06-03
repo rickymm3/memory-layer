@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Contested{% endblock %}
+{% block content %}
+<h2>Contested Memories
+  <small style="font-size:.6em;color:var(--pico-muted-color)">disagreement_score ≥ 0.5</small>
+</h2>
+
+{% if atoms %}
+<p style="color:#991b1b">
+  ⚠️ {{ atoms|length }} atom{{ 's' if atoms|length != 1 }} with significant disagreement.
+  Inspect signals to decide whether to update or keep each memory.
+</p>
+<div style="overflow-x:auto">
+<table>
+  <thead>
+    <tr>
+      <th>Content</th>
+      <th>Type</th>
+      <th>Scope</th>
+      <th>Disagree ↓</th>
+      <th>Support</th>
+      <th>Opposition</th>
+      <th>Confidence</th>
+      <th>Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in atoms %}
+    <tr class="contested-row">
+      <td class="truncate">
+        <a href="/atom/{{ a.id }}">{{ a.content }}</a> <span title="Contested">⚠️</span>
+      </td>
+      <td><span class="badge badge-{{ a.memory_type }}">{{ a.memory_type }}</span></td>
+      <td><span class="monospace">{{ a.scope or '—' }}</span></td>
+      <td>
+        <span class="conf-low"><strong>{{ a.disagreement_score }}</strong></span>
+        <div style="width:50px;height:4px;background:#e5e7eb;border-radius:2px;margin-top:3px">
+          <div style="width:{{ (a.disagreement_score * 100) | int }}%;height:4px;background:#ef4444;border-radius:2px"></div>
+        </div>
+      </td>
+      <td>{{ a.support_weight }}</td>
+      <td class="{% if a.opposition_weight > 0 %}conf-low{% endif %}">{{ a.opposition_weight }}</td>
+      <td>
+        <span class="{% if a.confidence >= 0.75 %}conf-high{% elif a.confidence >= 0.5 %}conf-mid{% else %}conf-low{% endif %}">{{ a.confidence }}</span>
+        <div style="width:50px;height:4px;background:#e5e7eb;border-radius:2px;margin-top:3px">
+          <div style="width:{{ (a.confidence * 100) | int }}%;height:4px;background:{% if a.confidence >= 0.75 %}#16a34a{% elif a.confidence >= 0.5 %}#f59e0b{% else %}#ef4444{% endif %};border-radius:2px"></div>
+        </div>
+      </td>
+      <td><span class="monospace">{{ a.created_at }}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p style="color:#166534">✓ No contested memories. All atoms have disagreement_score &lt; 0.5.</p>
+{% endif %}
+{% endblock %}

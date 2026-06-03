@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}memoryLayer{% endblock %} — dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <style>
+    body { max-width: 1200px; margin: 0 auto; padding: 0 1rem; }
+    nav ul { gap: 1.5rem; }
+    .badge {
+      display: inline-block;
+      padding: .1em .5em;
+      border-radius: .3em;
+      font-size: .78em;
+      font-weight: 600;
+      background: var(--pico-muted-background);
+      color: var(--pico-muted-color);
+    }
+    .badge-decision  { background: #dbeafe; color: #1e40af; }
+    .badge-instruction { background: #fef9c3; color: #854d0e; }
+    .badge-fact      { background: #dcfce7; color: #166534; }
+    .badge-opinion   { background: #fce7f3; color: #9d174d; }
+    .badge-preference { background: #ede9fe; color: #5b21b6; }
+    .badge-new       { background: #dcfce7; color: #166534; }
+    .badge-conflict  { background: #fee2e2; color: #991b1b; }
+    .badge-refinement { background: #dbeafe; color: #1e40af; }
+    .badge-opinion_change { background: #fce7f3; color: #9d174d; }
+    .badge-reinforcement { background: #dcfce7; color: #166534; }
+    .conf-low-row td { background: #fefce8 !important; }
+    .contested-row td { background: #fff1f2 !important; }
+    .lifecycle-inactive-row td { background: #f3f4f6 !important; opacity: .75; }
+    .conf-high  { color: #166534; font-weight: 600; }
+    .conf-mid   { color: #854d0e; }
+    .conf-low   { color: #991b1b; }
+    .lifecycle-active    { color: #166534; font-size: .78em; font-weight: 600; }
+    .lifecycle-superseded { color: #7c3aed; font-size: .78em; font-weight: 600; }
+    .lifecycle-archived  { color: #6b7280; font-size: .78em; font-weight: 600; }
+    .lifecycle-contested { color: #b45309; font-size: .78em; font-weight: 600; }
+    table { font-size: .88rem; }
+    td, th { vertical-align: top; }
+    .truncate { max-width: 420px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .monospace { font-family: monospace; font-size: .8em; color: var(--pico-muted-color); }
+    /* Source provenance badge */
+    .source-badge {
+      font-size: .68rem; font-weight: 700; letter-spacing: .02em;
+      padding: .08rem .35rem; border-radius: .25rem;
+      display: inline-block; vertical-align: middle; margin-left: .2rem;
+    }
+    .source-web { background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
+  </style>
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  <header>
+    <nav>
+      <ul>
+        <li><strong><a href="/" style="text-decoration:none">🧠 memoryLayer</a></strong></li>
+      </ul>
+      <ul>
+        <li><a href="/">Atoms</a></li>
+        <li><a href="/scopes">Scopes</a></li>
+        <li><a href="/contested">Contested</a></li>
+        <li><a href="/proposals">Proposals</a></li>
+        <li><a href="/task_runs">Task Runs</a></li>
+        <li><a href="/model_lessons">Model Lessons</a></li>
+        <li><a href="/commits">Commits</a></li>
+        <li><a href="/context_traces">Context</a></li>
+        <li><a href="/response_traces">Responses</a></li>
+        <li><a href="/beliefs">Beliefs</a></li>
+        <li><a href="/prompt_history">Prompt History</a></li>
+        <li><a href="/chat">Chat</a></li>
+      </ul>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    <small style="color:var(--pico-muted-color)">Read-only dashboard — approve proposals via <code>make review-proposals</code></small>
+  </footer>
+</body>
+</html>

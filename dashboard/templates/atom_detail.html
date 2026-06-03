@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title %}Atom {{ atom.id[:8] }}{% endblock %}
+{% block content %}
+<p><a href="/">← All atoms</a></p>
+
+<article>
+  <header>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.5rem">
+      <div>
+        <span class="badge badge-{{ atom.memory_type }}">{{ atom.memory_type }}</span>
+        <span class="monospace" style="margin-left:.5rem">{{ atom.scope or '—' }}</span>
+        {% if atom.source_type == 'web_research' %}
+          <span class="source-badge source-web" style="margin-left:.5rem">web research</span>
+        {% endif %}
+        {% if atom.disagreement_flag %}
+          <span style="margin-left:.5rem">⚠️ <strong style="color:#991b1b">Contested</strong></span>
+        {% endif %}
+      </div>
+      <span class="monospace">{{ atom.id }}</span>
+    </div>
+    <h3 style="margin-top:.6rem;margin-bottom:0">{{ atom.content }}</h3>
+  </header>
+
+  {% if atom.context_summary and atom.context_summary != atom.content %}
+  <p style="color:var(--pico-muted-color);font-style:italic">{{ atom.context_summary }}</p>
+  {% endif %}
+
+  {% if atom.source_url %}
+  <p style="font-size:.82em;margin-bottom:.75rem">
+    <strong>Source:</strong>
+    <a href="{{ atom.source_url }}" target="_blank" rel="noopener noreferrer" class="monospace">{{ atom.source_url }}</a>
+  </p>
+  {% endif %}
+
+  <div style="display:flex;gap:2rem;flex-wrap:wrap;margin-top:1rem">
+    <div>
+      <small>Confidence</small><br>
+      <strong class="{% if atom.confidence >= 0.75 %}conf-high{% elif atom.confidence >= 0.5 %}conf-mid{% else %}conf-low{% endif %}">
+        {{ atom.confidence }}
+      </strong>
+    </div>
+    <div>
+      <small>Importance</small><br>
+      <strong>{{ atom.importance }}</strong>
+    </div>
+    <div>
+      <small>Retrieval priority</small><br>
+      <strong class="{% if atom.retrieval_priority >= 0.9 %}conf-high{% elif atom.retrieval_priority >= 0.5 %}conf-mid{% else %}conf-low{% endif %}">
+        {{ atom.retrieval_priority }}
+      </strong>
+    </div>
+    <div>
+      <small>Support weight</small><br>
+      <strong class="conf-high">{{ atom.support_weight }}</strong>
+      <div style="width:80px;height:5px;background:#e5e7eb;border-radius:3px;margin-top:4px">
+        <div style="width:{{ [atom.support_weight * 50, 100] | min | int }}%;height:5px;background:#16a34a;border-radius:3px"></div>
+      </div>
+    </div>
+    <div>
+      <small>Opposition weight</small><br>
+      <strong class="{% if atom.opposition_weight > 0 %}conf-low{% endif %}">{{ atom.opposition_weight }}</strong>
+      <div style="width:80px;height:5px;background:#e5e7eb;border-radius:3px;margin-top:4px">
+        <div style="width:{{ [atom.opposition_weight * 50, 100] | min | int }}%;height:5px;background:#ef4444;border-radius:3px"></div>
+      </div>
+    </div>
+    <div>
+      <small>Disagreement score</small><br>
+      <strong class="{% if atom.disagreement_score >= 0.5 %}conf-low{% elif atom.disagreement_score > 0 %}conf-mid{% endif %}">
+        {{ atom.disagreement_score }}
+      </strong>
+      <div style="width:80px;height:5px;background:#e5e7eb;border-radius:3px;margin-top:4px">
+        <div style="width:{{ (atom.disagreement_score * 100) | int }}%;height:5px;background:{% if atom.disagreement_score >= 0.5 %}#ef4444{% elif atom.disagreement_score > 0 %}#f59e0b{% else %}#d1d5db{% endif %};border-radius:3px"></div>
+      </div>
+    </div>
+    <div>
+      <small>Created</small><br>
+      <span class="monospace">{{ atom.created_at }}</span>
+    </div>
+    <div>
+      <small>Last recomputed</small><br>
+      <span class="monospace">{{ atom.last_recomputed_at }}</span>
+    </div>
+  </div>
+</article>
+
+{% if atom.lifecycle_status != 'active' %}
+<article style="background:{% if atom.lifecycle_status == 'superseded' %}#f5f3ff{% elif atom.lifecycle_status == 'deprecated' %}#f3f4f6{% elif atom.lifecycle_status == 'archived' %}#f9fafb{% else %}#fef9c3{% endif %};border:1px solid {% if atom.lifecycle_status == 'superseded' %}#c4b5fd{% elif atom.lifecycle_status == 'deprecated' %}#d1d5db{% elif atom.lifecycle_status == 'archived' %}#e5e7eb{% else %}#fde047{% endif %};border-radius:.5rem;padding:.9rem 1.25rem;margin-bottom:1.5rem">
+  <strong class="lifecycle-{{ atom.lifecycle_status if atom.lifecycle_status != 'deprecated' else 'superseded' }}">
+    ⊘ Lifecycle: {{ atom.lifecycle_status }}
+  </strong>
+  {% if atom.lifecycle_reason %}
+  <p style="margin:.4rem 0 0;font-size:.9em">{{ atom.lifecycle_reason }}</p>
+  {% endif %}
+  {% if atom.superseded_by_atom_id %}
+  <p style="margin:.4rem 0 0;font-size:.9em">
+    Superseded by: <a href="/atom/{{ atom.superseded_by_atom_id }}" class="monospace">{{ atom.superseded_by_atom_id }}</a>
+  </p>
+  {% endif %}
+  {% if atom.lifecycle_updated_at %}
+  <p style="margin:.2rem 0 0;font-size:.8em;color:var(--pico-muted-color)">Updated: {{ atom.lifecycle_updated_at }}</p>
+  {% endif %}
+  <p style="margin:.4rem 0 0;font-size:.8em;color:var(--pico-muted-color)">
+    This atom is excluded from <code>memory_project_context</code>{% if atom.lifecycle_status == 'archived' %} and <code>memory_search</code>{% endif %}.
+    Signals remain intact and immutable.
+  </p>
+</article>
+{% endif %}
+
+{% if atom.disagreement_flag %}
+<article style="background:#fff1f2;border:1px solid #fca5a5;border-radius:.5rem;padding:.9rem 1.25rem;margin-bottom:1.5rem">
+  <strong style="color:#991b1b">⚠️ Contested memory</strong>
+  <p style="margin:.4rem 0 0;font-size:.9em;color:#7f1d1d">
+    disagreement_score <strong>{{ atom.disagreement_score }}</strong> ≥ 0.5 &mdash;
+    support&nbsp;<strong>{{ atom.support_weight }}</strong> vs opposition&nbsp;<strong>{{ atom.opposition_weight }}</strong>.
+    Inspect signals below to see why this atom is contested.
+  </p>
+</article>
+{% endif %}
+
+{% set ns = namespace(supporting=0, conflicting=0) %}
+{% for s in signals %}
+  {% if s.relationship in ('conflict', 'opinion_change') %}{% set ns.conflicting = ns.conflicting + 1 %}
+  {% else %}{% set ns.supporting = ns.supporting + 1 %}{% endif %}
+{% endfor %}
+
+<h4>Signal provenance
+  <small style="font-weight:400;color:var(--pico-muted-color)">
+    {{ signals|length }} signal{{ 's' if signals|length != 1 }}
+    {% if signals %}&mdash;
+      <span class="conf-high">{{ ns.supporting }} supporting</span>
+      {% if ns.conflicting > 0 %} &middot; <span class="conf-low">{{ ns.conflicting }} conflicting</span>{% endif %}
+    {% endif %}
+  </small>
+</h4>
+
+{% if signals %}
+<div style="overflow-x:auto">
+<table>
+  <thead>
+    <tr>
+      <th>Relationship</th>
+      <th>Source</th>
+      <th>Type</th>
+      <th>Confidence</th>
+      <th>Reason</th>
+      <th>Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in signals %}
+    <tr{% if s.relationship in ('conflict', 'opinion_change') %} class="contested-row"{% endif %}>
+      <td>
+        <span class="badge badge-{{ s.relationship }}">{{ s.relationship }}</span><br>
+        <span class="monospace" style="font-size:.72em;color:var(--pico-muted-color)">{{ s.id }}</span>
+      </td>
+      <td><span class="monospace">{{ s.source_key }}</span></td>
+      <td><span class="monospace">{{ s.source_type }}</span></td>
+      <td>{{ s.confidence }}</td>
+      <td style="max-width:360px;font-size:.85em">{{ s.reconciliation_reason }}</td>
+      <td><span class="monospace">{{ s.created_at }}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p style="color:var(--pico-muted-color)">No signals linked to this atom.</p>
+{% endif %}
+{% endblock %}

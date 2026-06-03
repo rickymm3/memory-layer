@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Atoms{% endblock %}
+{% block content %}
+<h2>Memory Atoms <small style="font-size:.6em;color:var(--pico-muted-color)">{{ atoms|length }} shown</small></h2>
+
+<form method="get" action="/">
+  <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end">
+    <label style="flex:1;min-width:160px">
+      Scope
+      <select name="scope">
+        <option value="">— all —</option>
+        {% for s in scopes %}
+          <option value="{{ s }}" {% if s == scope_filter %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label style="flex:1;min-width:140px">
+      Type
+      <select name="type">
+        <option value="">— all —</option>
+        {% for t in types %}
+          <option value="{{ t }}" {% if t == type_filter %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label style="flex:0 0 140px">
+      Min confidence
+      <input type="number" name="min_confidence" value="{{ min_conf }}" min="0" max="1" step="0.05">
+    </label>
+    <div style="padding-bottom:.1rem">
+      <button type="submit">Filter</button>
+      <a href="/" role="button" class="secondary" style="margin-left:.4rem">Reset</a>
+    </div>
+  </div>
+</form>
+
+{% set ns = namespace(contested=0, low_conf=0) %}
+{% for a in atoms %}
+  {% if a.disagreement_flag %}{% set ns.contested = ns.contested + 1 %}{% endif %}
+  {% if a.confidence < 0.5 %}{% set ns.low_conf = ns.low_conf + 1 %}{% endif %}
+{% endfor %}
+{% if ns.contested > 0 or ns.low_conf > 0 %}
+<p style="font-size:.9em;margin-top:-.3rem">
+  {% if ns.contested > 0 %}<span class="conf-low" style="font-weight:600">⚠️ {{ ns.contested }} contested</span>{% endif %}
+  {% if ns.contested > 0 and ns.low_conf > 0 %} &nbsp;&middot;&nbsp; {% endif %}
+  {% if ns.low_conf > 0 %}<span style="color:#854d0e">{{ ns.low_conf }} low confidence</span>{% endif %}
+</p>
+{% endif %}
+
+{% if atoms %}
+<div style="overflow-x:auto">
+<table>
+  <thead>
+    <tr>
+      <th>Content</th>
+      <th>Type</th>
+      <th>Scope</th>
+      <th>Status</th>
+      <th>Conf</th>
+      <th>Support</th>
+      <th>Opposition</th>
+      <th>Disagree</th>
+      <th>Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in atoms %}
+    <tr {% if a.disagreement_flag %}class="contested-row"{% elif a.lifecycle_status != 'active' %}class="lifecycle-inactive-row"{% elif a.confidence < 0.5 %}class="conf-low-row"{% endif %}>
+      <td class="truncate">
+        <a href="/atom/{{ a.id }}">{{ a.content }}</a>
+        {% if a.disagreement_flag %} <span title="Contested">⚠️</span>{% endif %}
+        {% if a.lifecycle_status != 'active' %} <span title="{{ a.lifecycle_status }}" style="font-size:.8em;opacity:.7">⊘</span>{% endif %}
+        {% if a.source_type == 'web_research' %} <span class="source-badge source-web" title="{% if a.source_url %}{{ a.source_url }}{% else %}web research{% endif %}">web</span>{% endif %}
+      </td>
+      <td><span class="badge badge-{{ a.memory_type }}">{{ a.memory_type }}</span></td>
+      <td><span class="monospace">{{ a.scope or '—' }}</span></td>
+      <td>
+        {% if a.lifecycle_status == 'active' %}
+          <span class="lifecycle-active">active</span>
+        {% elif a.lifecycle_status == 'superseded' %}
+          <span class="lifecycle-superseded">superseded</span>
+        {% elif a.lifecycle_status == 'deprecated' %}
+          <span class="lifecycle-superseded">deprecated</span>
+        {% elif a.lifecycle_status == 'archived' %}
+          <span class="lifecycle-archived">archived</span>
+        {% elif a.lifecycle_status == 'contested' %}
+          <span class="lifecycle-contested">contested</span>
+        {% else %}
+          <span>{{ a.lifecycle_status }}</span>
+        {% endif %}
+      </td>
+      <td>
+        <span class="{% if a.confidence >= 0.75 %}conf-high{% elif a.confidence >= 0.5 %}conf-mid{% else %}conf-low{% endif %}">{{ a.confidence }}</span>
+        <div style="width:50px;height:4px;background:#e5e7eb;border-radius:2px;margin-top:3px">
+          <div style="width:{{ (a.confidence * 100) | int }}%;height:4px;background:{% if a.confidence >= 0.75 %}#16a34a{% elif a.confidence >= 0.5 %}#f59e0b{% else %}#ef4444{% endif %};border-radius:2px"></div>
+        </div>
+      </td>
+      <td>{{ a.support_weight }}</td>
+      <td class="{% if a.opposition_weight > 0 %}conf-low{% endif %}">{{ a.opposition_weight }}</td>
+      <td>
+        <span class="{% if a.disagreement_score >= 0.5 %}conf-low{% elif a.disagreement_score > 0 %}conf-mid{% endif %}">{{ a.disagreement_score }}</span>
+        <div style="width:50px;height:4px;background:#e5e7eb;border-radius:2px;margin-top:3px">
+          <div style="width:{{ (a.disagreement_score * 100) | int }}%;height:4px;background:{% if a.disagreement_score >= 0.5 %}#ef4444{% elif a.disagreement_score > 0 %}#f59e0b{% else %}#d1d5db{% endif %};border-radius:2px"></div>
+        </div>
+      </td>
+      <td><span class="monospace">{{ a.created_at }}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p>No atoms match the current filters.</p>
+{% endif %}
+{% endblock %}

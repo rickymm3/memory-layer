@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Task Run {{ run.id[:8] }}{% endblock %}
+{% block content %}
+<p><a href="/task_runs">← Task Runs</a></p>
+<h2>Task Run <span class="monospace" style="font-size:.7em">{{ run.id }}</span></h2>
+
+<article style="background:var(--pico-card-background-color);border:1px solid var(--pico-muted-border-color);border-radius:.5rem;padding:1.2rem 1.5rem;margin-bottom:1.5rem">
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.6rem 2rem;font-size:.9rem">
+    <div><strong>Scope</strong><br><span class="monospace">{{ run.scope }}</span></div>
+    <div><strong>Model</strong><br><span class="monospace">{{ run.model_used }}</span></div>
+    <div><strong>Outcome</strong><br>
+      {% if run.outcome == 'success' %}<span class="badge badge-new">success</span>
+      {% elif run.outcome == 'partial' %}<span class="badge badge-refinement">partial</span>
+      {% else %}<span class="badge badge-conflict">failed</span>{% endif %}
+    </div>
+    <div><strong>Lessons stored</strong><br><strong>{{ run.lessons_stored }}</strong></div>
+    <div><strong>Created</strong><br><span class="monospace">{{ run.created_at }}</span></div>
+  </div>
+  <hr style="margin:.9rem 0">
+  <div style="font-size:.9rem"><strong>Task</strong><br>{{ run.task_description }}</div>
+  {% if run.files_changed != '—' %}
+  <div style="font-size:.85rem;margin-top:.6rem"><strong>Files</strong><br><span class="monospace">{{ run.files_changed }}</span></div>
+  {% endif %}
+  {% if run.test_results != '—' %}
+  <div style="font-size:.85rem;margin-top:.6rem"><strong>Tests</strong><br>{{ run.test_results }}</div>
+  {% endif %}
+  {% if run.notes != '—' %}
+  <div style="font-size:.85rem;margin-top:.6rem"><strong>Notes</strong><br>{{ run.notes }}</div>
+  {% endif %}
+</article>
+
+<h3>Linked Lessons <small style="font-size:.6em;color:var(--pico-muted-color)">{{ lessons|length }}</small></h3>
+{% if lessons %}
+<div style="overflow-x:auto">
+<table>
+  <thead>
+    <tr>
+      <th>Content</th>
+      <th>Type</th>
+      <th>Scope</th>
+      <th>Conf</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for l in lessons %}
+    <tr {% if l.lifecycle_status != 'active' %}class="lifecycle-inactive-row"{% endif %}>
+      <td class="truncate" style="max-width:400px">
+        <a href="/atom/{{ l.id }}">{{ l.content }}</a>
+      </td>
+      <td><span class="badge badge-{{ l.memory_type }}">{{ l.memory_type }}</span></td>
+      <td><span class="monospace">{{ l.scope }}</span></td>
+      <td class="{% if l.confidence >= 0.75 %}conf-high{% elif l.confidence >= 0.5 %}conf-mid{% else %}conf-low{% endif %}">
+        {{ l.confidence }}
+      </td>
+      <td><span class="lifecycle-{{ l.lifecycle_status }}">{{ l.lifecycle_status }}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p>No linked lessons found for this task run.</p>
+{% endif %}
+{% endblock %}

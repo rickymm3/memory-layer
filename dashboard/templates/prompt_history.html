@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Prompt History{% endblock %}
+
+{% block content %}
+<style>
+  .verdict-badge {
+    display: inline-block; padding: .15rem .45rem;
+    border-radius: .3rem; font-size: .75rem; font-weight: 600; white-space: nowrap;
+  }
+  .v-approved            { background: #dcfce7; color: #166534; }
+  .v-needs_caveat        { background: #fef9c3; color: #854d0e; }
+  .v-needs_revision      { background: #ffedd5; color: #9a3412; }
+  .v-needs_verification  { background: #dbeafe; color: #1e40af; }
+  .v-blocked             { background: #fee2e2; color: #991b1b; }
+
+  .ctx-badge {
+    display: inline-block; padding: .1rem .35rem;
+    border-radius: .25rem; font-size: .72rem; font-weight: 600;
+  }
+  .ctx-sufficient   { background: #dcfce7; color: #166534; }
+  .ctx-insufficient { background: #ffedd5; color: #9a3412; }
+  .ctx-stale        { background: #fef9c3; color: #713f12; }
+  .ctx-conflicting  { background: #fee2e2; color: #991b1b; }
+  .ctx-unsupported  { background: #f3f4f6; color: #374151; }
+  .ctx-needs_verification { background: #dbeafe; color: #1e40af; }
+  .ctx-needs_user_clarification { background: #ede9fe; color: #5b21b6; }
+  .ctx-unsafe_or_blocked { background: #fee2e2; color: #991b1b; }
+
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th { text-align: left; padding: .45rem .6rem;
+    border-bottom: 2px solid var(--pico-muted-border-color);
+    font-size: .77rem; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+  td { padding: .45rem .6rem; border-bottom: 1px solid var(--pico-muted-border-color); vertical-align: top; }
+  tr:hover td { background: var(--pico-card-background-color, #f9fafb); }
+
+  .msg-col { max-width: 380px; word-break: break-word; }
+  .ts-col  { font-size: .76rem; color: #6b7280; white-space: nowrap; }
+  .atoms-col { font-size: .8rem; color: #374151; }
+
+  .no-context { font-size: .75rem; color: #9ca3af; font-style: italic; }
+  .empty { padding: 3rem; text-align: center; color: var(--pico-muted-color); }
+</style>
+
+<h2>Prompt History</h2>
+<p style="font-size:.85rem;color:var(--pico-muted-color);margin-top:-.5rem">
+  Every chat turn — original prompt, retrieved memory atoms, and the final answer.
+  Click a row to inspect the full context injection for that turn.
+</p>
+
+{% if turns %}
+<table>
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Prompt</th>
+      <th>Verdict</th>
+      <th>Context</th>
+      <th>Atoms used / retrieved</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in turns %}
+    <tr style="cursor:pointer" onclick="window.location='/prompt_history/{{ t.id }}'">
+      <td class="ts-col">{{ t.created_at }}</td>
+      <td class="msg-col">
+        {{ t.user_message[:180] }}{% if t.user_message|length > 180 %}…{% endif %}
+      </td>
+      <td>
+        {% if t.verdict %}
+        <span class="verdict-badge v-{{ t.verdict }}">{{ t.verdict.replace('_', ' ') }}</span>
+        {% else %}—{% endif %}
+      </td>
+      <td>
+        {% if t.context_status and t.context_status != '—' %}
+        <span class="ctx-badge ctx-{{ t.context_status }}">{{ t.context_status.replace('_', ' ') }}</span>
+        {% if t.confidence is not none %}
+          <br><span style="font-size:.72rem;color:#6b7280">conf {{ t.confidence }}</span>
+        {% endif %}
+        {% else %}
+          <span class="no-context">no trace</span>
+        {% endif %}
+      </td>
+      <td class="atoms-col">
+        {% if t.retrieved_count > 0 %}
+          <strong>{{ t.used_count }}</strong> / {{ t.retrieved_count }}
+        {% else %}
+          <span class="no-context">none</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No prompt history yet — send a message in <a href="/chat">Chat</a> to get started.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Scopes{% endblock %}
+{% block content %}
+<h2>Memory Scopes <small style="font-size:.6em;color:var(--pico-muted-color)">{{ scopes|length }} scope{{ 's' if scopes|length != 1 }}</small></h2>
+<p style="font-size:.9em;color:var(--pico-muted-color);margin-top:-.5rem">
+  One row per scope. Scope names link to the filtered atom list. Approve proposals via <code>make review-proposals</code>.
+</p>
+
+{% if scopes %}
+<div style="overflow-x:auto">
+<table>
+  <thead>
+    <tr>
+      <th>Scope</th>
+      <th>Atoms</th>
+      <th>Contested</th>
+      <th>Low confidence</th>
+      <th>Avg confidence</th>
+      <th>Newest</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in scopes %}
+    <tr {% if s.contested > 0 %}class="contested-row"{% elif s.low_conf > 0 %}class="conf-low-row"{% endif %}>
+      <td>
+        {% if s.scope_raw %}
+          <a href="/?scope={{ s.scope_raw }}"><span class="monospace">{{ s.scope_display }}</span></a>
+        {% else %}
+          <span class="monospace" style="color:var(--pico-muted-color)">{{ s.scope_display }}</span>
+        {% endif %}
+      </td>
+      <td><strong>{{ s.total }}</strong></td>
+      <td class="{% if s.contested > 0 %}conf-low{% endif %}">
+        {% if s.contested > 0 %}⚠️ {{ s.contested }}{% else %}0{% endif %}
+      </td>
+      <td class="{% if s.low_conf > 0 %}conf-mid{% endif %}">
+        {{ s.low_conf }}
+      </td>
+      <td>
+        {% if s.avg_conf is not none %}
+          <span class="{% if s.avg_conf >= 0.75 %}conf-high{% elif s.avg_conf >= 0.5 %}conf-mid{% else %}conf-low{% endif %}">
+            {{ s.avg_conf }}
+          </span>
+        {% else %}—{% endif %}
+      </td>
+      <td><span class="monospace">{{ s.newest }}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p>No memory atoms found.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Proposals{% endblock %}
+{% block content %}
+<h2>Proposal Queue
+  <small style="font-size:.6em;color:var(--pico-muted-color)">pending_review</small>
+</h2>
+
+{% if proposals %}
+<p>
+  {{ proposals|length }} proposal{{ 's' if proposals|length != 1 }} awaiting review.
+  Run <code>make review-proposals</code> in a terminal to approve or reject.
+</p>
+<div style="overflow-x:auto">
+<table>
+  <thead>
+    <tr>
+      <th>Content</th>
+      <th>Type</th>
+      <th>Scope</th>
+      <th>Relationship</th>
+      <th>Confidence</th>
+      <th>Importance</th>
+      <th>Queued</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in proposals %}
+    <tr>
+      <td style="max-width:440px;font-size:.88em">{{ p.content }}</td>
+      <td><span class="badge badge-{{ p.memory_type }}">{{ p.memory_type }}</span></td>
+      <td><span class="monospace">{{ p.scope }}</span></td>
+      <td><span class="badge badge-{{ p.relationship }}">{{ p.relationship }}</span></td>
+      <td>{{ p.confidence }}</td>
+      <td>{{ p.importance }}</td>
+      <td><span class="monospace">{{ p.created_at }}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p style="color:#166534">✓ No pending proposals. Queue is empty.</p>
+{% endif %}
+{% endblock %}
