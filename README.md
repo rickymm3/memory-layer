@@ -24,35 +24,6 @@ A local PostgreSQL + pgvector database with:
 
 ---
 
-## The shared brain vision
-
-The goal is not just "compressed context for one chat." It's **LLM-agnostic persistent memory as a shared belief system**.
-
-### How it works
-
-Memories from any LLM aren't automatically treated as truth — they're **evidence**. Each candidate enters the same reconciliation pipeline that already handles conflict and supersession locally, now extended across sources:
-
-- **Agreement** — multiple sources confirm the same memory → confidence rises
-- **Disagreement** — sources conflict → tracked explicitly, visible, reasoned about over time  
-- **Provenance** — every memory linked to its source(s) with timestamps
-- **Confidence** — computed from agreement/disagreement signals, decaying over time
-
-Any MCP-compatible LLM can propose memories — Claude, Copilot, Ollama, future models — and they all write to the same store. Decisions made in one session are available to all others. User preferences, project constraints, model-specific lessons — all in one place, under your control, on your hardware.
-
-The system is **not** a "shared database that all models blindly trust." It's a **persistent belief system that tracks disagreement and surfaces it for human review**.
-
----
-
-## What shared brain does NOT mean
-
-- **Not a global consensus engine** — disagreement is preserved and visible, never hidden by averaging or voting
-- **Not automatic synchronization across models** — proposals from one model don't automatically update memory until approved
-- **Not federated yet** — all memory is local; P2P or cloud federation may come later as opt-in layers (Phase 8)
-- **Not a fine-tuning replacement** — the models themselves don't retrain; the system compensates by retrieving persistent context
-- **Not secrets-agnostic** — you control what's stored; credentials and sensitive data must be filtered before writing
-
----
-
 ## Stack
 
 | Component | Role |
@@ -96,6 +67,7 @@ EMBEDDING_MODEL=qwen3-embedding:latest
 ```
 
 On WSL2 (Windows), Ollama runs on the Windows host — replace `localhost` with your gateway IP:
+
 ```env
 OLLAMA_HOST=http://172.22.0.1:11434   # WSL2 only — run: ip route | grep default
 ```
@@ -167,13 +139,13 @@ The memory layer separates chat and embeddings into two independent providers. S
 ### Ollama only (default — no API keys needed)
 
 ```env
-# No extra config needed. Defaults are:
 OLLAMA_HOST=http://localhost:11434
 CHAT_MODEL=qwen3:8b
 EMBEDDING_MODEL=qwen3-embedding:latest
 ```
 
 Pull the required models:
+
 ```bash
 ollama pull qwen3:8b
 ollama pull qwen3-embedding:latest
@@ -186,7 +158,7 @@ Anthropic has no public embeddings API, so you still need Ollama running locally
 ```env
 CHAT_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
-CHAT_MODEL=claude-opus-4-5          # or claude-3-5-haiku-latest, etc.
+CHAT_MODEL=claude-opus-4-6          # or claude-sonnet-4-6, claude-haiku-4-5-20251001
 
 EMBEDDING_PROVIDER=ollama           # required — Anthropic cannot embed
 EMBEDDING_MODEL=qwen3-embedding:latest
@@ -244,15 +216,17 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (Mac) o
 To bring memories from a Claude, GPT-4, or any other conversation into the store:
 
 **Via CLI:**
+
 ```bash
 # Export your conversation as JSON, then:
-python scripts/ingest_transcript.py --file transcript.json --source claude-3-7-sonnet
+python scripts/ingest_transcript.py --file transcript.json --source claude-opus-4-6
 
 # Dry-run first to see what would be extracted:
 python scripts/ingest_transcript.py --file transcript.json --dry-run
 ```
 
 **Transcript format** (JSON array):
+
 ```json
 [
   {"role": "user", "content": "We decided to use Postgres, not SQLite."},
@@ -262,8 +236,9 @@ python scripts/ingest_transcript.py --file transcript.json --dry-run
 ```
 
 **Via MCP** (from any connected LLM):
+
 ```
-Call memory_ingest_transcript with the turns array and source_label="claude-3-7-sonnet"
+Call memory_ingest_transcript with the turns array and source_label="claude-opus-4-6"
 ```
 
 Every imported candidate goes through the full pipeline — reconciliation, critic review, risk gate — before any write. Nothing is stored silently.
@@ -387,6 +362,31 @@ Web results are used in responses but are never auto-stored as memory atoms. Any
 
 ---
 
+## The shared brain vision
+
+The goal is not just "compressed context for one chat." It's **LLM-agnostic persistent memory as a shared belief system**.
+
+Memories from any LLM aren't automatically treated as truth — they're **evidence**. Each candidate enters the same reconciliation pipeline that handles conflict and supersession locally, now extended across sources:
+
+- **Agreement** — multiple sources confirm the same memory → confidence rises
+- **Disagreement** — sources conflict → tracked explicitly, visible, reasoned about over time
+- **Provenance** — every memory linked to its source(s) with timestamps
+- **Confidence** — computed from agreement/disagreement signals, decaying over time
+
+Any MCP-compatible LLM can propose memories — Claude, Copilot, Ollama, future models — and they all write to the same store. Decisions made in one session are available to all others. User preferences, project constraints, model-specific lessons — all in one place, under your control, on your hardware.
+
+The system is **not** a "shared database that all models blindly trust." It's a **persistent belief system that tracks disagreement and surfaces it for human review**.
+
+### What this is not
+
+- **Not a global consensus engine** — disagreement is preserved and visible, never hidden by averaging or voting
+- **Not automatic synchronization** — proposals from one model don't update memory until approved
+- **Not federated yet** — all memory is local; P2P federation is a future opt-in layer
+- **Not a fine-tuning replacement** — the models themselves don't retrain; the system compensates by retrieving persistent context
+- **Not secrets-agnostic** — credentials and sensitive data must be filtered before writing
+
+---
+
 ## Project status
 
-Core pipeline, MCP server, Flask dashboard, signal aggregation, lifecycle management, web research, confidence-gated responses, and transcript ingest are all implemented and tested. See [docs/implementation_plan.md](docs/implementation_plan.md) for detailed phase history.
+Core pipeline, MCP server, Flask dashboard, signal aggregation, lifecycle management, web research, confidence-gated responses, and transcript ingest are all implemented and tested. See [readmeplan.md](readmeplan.md) for full phase history and design decisions.
