@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Syntax check Python files
+        run: |
+          python -m py_compile app/*.py
+          python -m py_compile mcp_server/*.py
+          python -m py_compile scripts/*.py
+          for file in mcp_server/tools/*.py; do python -m py_compile "$file"; done
+
+      - name: Check imports are resolvable
+        run: |
+          python -c "import flask; import psycopg; import requests; import dotenv"
+          python -c "import mcp_server.server"
+
+      - name: Verify file structure
+        run: |
+          test -f db/init.sql || (echo "ERROR: db/init.sql not found" && exit 1)
+          test -f Makefile || (echo "ERROR: Makefile not found" && exit 1)
+          test -f .env.example || (echo "ERROR: .env.example not found" && exit 1)
+          echo "File structure check passed"
+
+      - name: Report Python version
+        run: python --version
+
+      - name: Report installed packages
+        run: pip list | grep -E "flask|mcp|psycopg|requests|dotenv"

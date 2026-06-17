@@ -1,6 +1,16 @@
 # Core dependencies — install with: pip install -r requirements.txt
 flask>=3.0.0
-mcp>=1.0.0
+mcp==1.27.1
 psycopg[binary]>=3.1
 requests>=2.28.0
 python-dotenv>=1.0.0
+
+# Optional providers — install as needed for your LLM setup:
+# Anthropic Claude (required for CHAT_PROVIDER=anthropic)
+# anthropic>=0.40.0
+
+# OpenAI API (required for CHAT_PROVIDER=openai or EMBEDDING_PROVIDER=openai)
+# openai>=1.50.0
+
+# Other optional packages:
+# replicate>=0.30.0  # for image/video generation with FLUX/Minimax

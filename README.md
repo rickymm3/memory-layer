@@ -101,6 +101,31 @@ make doctor
 make session
 ```
 
+Example session output:
+
+```
+memory-layer › session started
+Retrieved 3 memories for context.
+
+You: this project uses parameterized SQL only, never f-strings
+
+[EXTRACT] candidate: "This project uses parameterized SQL only; f-string interpolation is prohibited."
+[RECONCILE] relationship: new — no similar atoms found
+[WRITE POLICY] auto-store: low-risk new fact
+[STORED] atom_id: a3f2b1c4-7e2d-4a1b-9f5e-6c3d8b2a1e9d | signal_id: 9e8d7f6a-5b4c-3d2e-1f0a-bcde1234f567
+
+You: what does this architecture use?
+
+[RETRIEVE] "This project uses parameterized SQL only; f-string interpolation is prohibited."
+[RETRIEVE] "Use Postgres + pgvector, not SQLite"
+[RETRIEVE] "Always run 'make doctor' after schema changes"
+
+Based on prior context:
+- Architecture: PostgreSQL + pgvector for durable semantic memory
+- Key constraint: parameterized SQL always, no f-string interpolation
+- Workflow: validate schema with 'make doctor' before committing
+```
+
 ---
 
 ## Connecting to GitHub Copilot (MCP)
