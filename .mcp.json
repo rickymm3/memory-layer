@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "memoryLayer": {
+      "command": "/home/ricky/memory-layer/scripts/run_mcp_server.sh"
+    }
+  }
+}

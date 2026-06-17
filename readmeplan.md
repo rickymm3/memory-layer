@@ -298,6 +298,7 @@ blindly. It includes a "Do NOT capture" list and "when in doubt, skip" guidance.
 | 7.6 | ✅ Done | Web Research Fallback — configurable provider abstraction, BraveSearchProvider, sensitive-content guard, no auto-store |
 | 7.7 | ✅ Done | Confidence-Gated Agent Loop — deterministic readiness assessment, `memory_assess_task_readiness` MCP tool, CLI + 10-assertion test suite |
 | 7.8 | ✅ Done | Epistemic-Status Handling — explicit supported/unsupported fact definitions in dashboard chat system prompts; model labels uncertain claims instead of suppressing them; opinions allowed; web-unavailability disclosed; verified by Test 14 in `test_web_research.py` |
+| 7.9 | ✅ Done | Turn Tracing & Multi-LLM Ingest — `memory_ingest_transcript`, `memory_reflect_turn`, `memory_get_belief`, `memory_log_turn` MCP tools; prompt-history audit tables, response/context trace tables, dashboard routes for trace inspection |
 | 8 | 🔮 Future Work | Moltbook-like Federated Memory |
 
 ---
@@ -1167,6 +1168,233 @@ make test-web-research     # 12 PASS, 0 FAIL (no regression)
 make test-chat-parity      # 5 PASS, 0 FAIL (no regression)
 make doctor                # 34 PASS, 1 WARN, 0 FAIL
 ```
+
+---
+
+## Phase 7.9: Turn Tracing & Multi-LLM Ingest ✅ Done
+
+Adds audit logging and transcript ingest to support multi-LLM scenarios: any MCP-compatible
+LLM can now share memories through the same store, with full provenance tracking. Also
+enables importing full conversations from non-MCP LLMs (Claude app, web, etc.) and extracting
+what's worth keeping.
+
+### The core problem it solves
+
+- **Single-LLM limitation:** Without turn tracing, the system couldn't distinguish which model made which proposal, or audit what the MCP server returned in earlier turns.
+- **Multi-LLM isolation:** Claude app, Copilot, and local Ollama were separate workflows; no unified audit trail across them.
+- **Transcript import gap:** Conversations from Claude app, ChatGPT, or browser sessions couldn't be ingested without manual extraction.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `db/migrations/006_add_commit_traces.sql` | New `memory_commits` table — log every write event with decision info |
+| `db/migrations/007_add_context_traces.sql` | New `memory_context_traces` table — log every context retrieval call (search, project_context, etc.) |
+| `db/migrations/008_add_response_traces.sql` | New `memory_response_traces` table — log LLM response generation + retrieval context + verdict |
+| `db/migrations/009_add_dashboard_sessions.sql` | New `dashboard_sessions` table — track dashboard user sessions for chat context |
+| `db/migrations/010_add_response_trace_gap_columns.sql` | Added `response_latency_ms` and `token_estimate` columns for analytics |
+| `app/memory_store.py` | New methods: `log_commit_event()`, `log_context_trace()`, `log_response_trace()` |
+| `mcp_server/tools/ingest_transcript.py` | New handler: `memory_ingest_transcript(turns, source_label, scope)` — import turns from external LLM, extract candidates, run through full write pipeline |
+| `mcp_server/tools/reflect_turn.py` | New handler: `memory_reflect_turn(user_msg, answer, thinking, scope)` — post-turn reflection for MCP consumers; extracts insights from response + chain-of-thought, stores via pipeline |
+| `mcp_server/tools/get_belief.py` | New handler: `memory_get_belief(atom_id or query, scope)` — inspect full belief state: current atom + supporting/opposing signals + revision history |
+| `mcp_server/tools/log_turn.py` | New handler: `memory_log_turn(user_msg, assistant_response, retrieved_ids, used_ids, context_status, verdict, confidence, reasoning)` — audit log entry for dashboard prompt-history view |
+| `mcp_server/server.py` | Import + register all four new tools: `memory_ingest_transcript`, `memory_reflect_turn`, `memory_get_belief`, `memory_log_turn` (tools 16–20) |
+| `dashboard/app.py` | New routes: `/prompt_history`, `/prompt_history/<trace_id>`, `/response_traces`, `/response_traces/<trace_id>`, `/context_traces` |
+| `dashboard/templates/prompt_history.html` | Prompt history list — sortable by model/date; filter by context status/verdict |
+| `dashboard/templates/prompt_history_detail.html` | Full prompt history card — user message, assistant response, retrieved atoms, used atoms, context verdict |
+| `dashboard/templates/response_traces.html` | Response trace list — latency, token estimate, verdict distribution |
+| `dashboard/templates/response_traces_detail.html` | Response trace detail — full context, response, timing metrics |
+| `dashboard/templates/context_traces.html` | Context trace list — which queries, counts, scope filters |
+| `scripts/test_mcp_handlers.py` | Updated: functional tests for all four new tools; transcript ingest parity with memory_reflect_turn |
+
+### New MCP tools (tools 16–20)
+
+#### `memory_ingest_transcript(turns, source_label?, scope?)`
+Import a full conversation transcript from any LLM. Each turn is processed through the full extraction → reconciliation → write pipeline.
+
+**Parameters:**
+- `turns`: List of `{role: "user"|"assistant", content: str}` dicts, chronological
+- `source_label` (optional): Name of originating LLM (e.g. `"claude-3-5-sonnet"`, `"gpt-4o"`); stored in signal provenance; default `"external"`
+- `scope` (optional): Override extraction scope for all atoms; if omitted, extractor assigns per-candidate
+
+**Returns:**
+```json
+{
+  "committed": [{atom_id, final_memory_text, memory_type, scope, write_action}, ...],
+  "proposed": [{candidate_text, proposal_id, reason}, ...],
+  "skipped": 3,
+  "turns_processed": 2
+}
+```
+
+**Use case:** Paste a full Claude app or ChatGPT conversation; extract memories in bulk with source attribution.
+
+---
+
+#### `memory_reflect_turn(user_msg, answer, thinking?, scope?)`
+Post-turn reflection called by an MCP client after generating a response. Extracts insights from the response and optional chain-of-thought, then runs them through the write pipeline.
+
+**Parameters:**
+- `user_msg`: User's message for this turn
+- `answer`: Final response text (assistant's answer)
+- `thinking` (optional): Chain-of-thought / reasoning trace (typically from `<think>...</think>` blocks)
+- `scope` (optional): Override extraction scope; if omitted, extractor assigns
+
+**Returns:**
+```json
+{
+  "committed": [{atom_id, ...}, ...],
+  "proposed": [{proposal_id, ...}, ...],
+  "skipped": 1
+}
+```
+
+**Use case:** Called by Claude Code, Copilot, or any MCP client after each response to capture durable lessons.
+
+---
+
+#### `memory_get_belief(atom_id or query, scope?)`
+Inspect the complete belief picture for an atom: current state + supporting/opposing evidence + full revision history.
+
+**Parameters:**
+- Either `atom_id` (UUID fetch) or `query` (semantic search; top match used)
+- `scope` (optional): Filter scope for semantic search
+
+**Returns:**
+```json
+{
+  "atom": {...},  # current belief state (full atom record)
+  "signals": {
+    "supporting": [...],     # signals that reinforce the belief
+    "opposing": [...]        # signals that challenge it
+  },
+  "revision_history": [...],  # oldest-first chain: born → refined → superseded → etc.
+  "belief_summary": "string"  # plain-English one-liner of current belief + confidence
+}
+```
+
+**Use case:** Understand why the system holds a belief and what evidence contests it.
+
+---
+
+#### `memory_log_turn(user_msg, assistant_response, retrieved_ids[], used_ids[], context_status, verdict, confidence, reasoning)`
+Audit log entry for prompt-history dashboard. Records what context was retrieved, what was actually used, how confident the response was, and what the quality verdict is.
+
+**Parameters:**
+- `user_msg`: User's message
+- `assistant_response`: Final response
+- `retrieved_ids`: All atom UUIDs fetched this turn via memory tools
+- `used_ids`: Subset of retrieved_ids that actually shaped the response
+- `context_status`: `'sufficient'` | `'insufficient'` | `'stale'` | `'conflicting'` | `'needs_verification'`
+- `verdict`: `'approved'` | `'needs_caveat'` | `'needs_revision'` | `'needs_verification'` | `'blocked'`
+- `confidence`: Float 0.0–1.0, quality confidence
+- `reasoning`: One-sentence explanation of how memory shaped this response
+
+**Returns:**
+```json
+{
+  "response_trace_id": "uuid",
+  "context_trace_id": "uuid",
+  "status": "logged"
+}
+```
+
+**Use case:** Build an audit trail for dashboard analytics: which contexts were sufficient, which verdicts occurred most, which LLMs retrieve the most vs. actually use.
+
+---
+
+### Trace tables: audit & analytics
+
+| Table | Purpose | Row count | Indexed by |
+|---|---|---|---|
+| `memory_commits` | Every write event (auto, proposed, CLI-approved) | 1 per store operation | `atom_id`, `signal_id`, `created_at` |
+| `memory_context_traces` | Every context retrieval call (search, project_context, etc.) | 1 per MCP read tool call | `scope`, `query`, `created_at` |
+| `memory_response_traces` | LLM response + retrieval context + quality verdict | 1 per turn | `context_status`, `verdict`, `created_at` |
+| `dashboard_sessions` | Dashboard user sessions (for chat context state) | 1 per session | `user_id`, `created_at` |
+
+**No impact on write policy or reconciliation:** All traces are read-only audit records created *after* the operation completes. They do not influence memory decisions.
+
+---
+
+### Dashboard routes
+
+| Route | Description |
+|-------|-------------|
+| `GET /prompt_history` | List all logged turns; filter by `?context_status=&verdict=&model=`; max 100 rows |
+| `GET /prompt_history/<trace_id>` | Full turn card: user msg, response, retrieved atoms, used atoms, context verdict |
+| `GET /response_traces` | Response metrics: latency, token estimate, verdict distribution |
+| `GET /response_traces/<trace_id>` | Response detail card with timing breakdowns |
+| `GET /context_traces` | Context retrieval audit: query patterns, scope distribution, count |
+
+---
+
+### What this phase does NOT do
+
+- Does **not** modify the write policy or reconciliation logic
+- Does **not** require new LLM providers
+- Does **not** support federated writes yet (Phase 8)
+- Does **not** auto-store web results or external claims — they go through the same pipeline as local memory
+
+### Verification
+
+```
+make test-mcp-handlers       # functional tests for all four new tools
+make test-chat-parity        # 5 PASS, 0 FAIL (no regression)
+make doctor                  # 34 PASS, 1 WARN, 0 FAIL
+```
+
+**Tool count:** 20 MCP tools registered (was 15).
+
+---
+
+### Design Considerations: Multi-Model Trust
+
+When multiple LLMs propose memories to the same store, a key design question emerges: *How should the system reason about disagreement and evidence weighting across different sources?*
+
+**The core insight:** Disagreement is not a failure case—it's valuable evidence. A shared belief system must **make disagreement visible and attributable**, never suppress it.
+
+#### Why naive trust doesn't work
+
+Simply averaging or voting on claims from different models fails because:
+- Different models have different strengths (one may be better at code, another at reasoning about specifications)
+- Both correct and incorrect claims can be confident-sounding
+- A weaker model can overwhelm a stronger one via brute volume
+- Disagreement is information, not noise
+
+#### How this system handles it
+
+**Current implementation (Phase 7.9):**
+- Every memory is linked to its source(s) via `memory_signals` with `source_key` and timestamps
+- `support_weight` and `opposition_weight` track agreement/disagreement across all sources
+- `disagreement_flag` is set when opposition is strong enough to warrant inspection
+- Atoms with high disagreement are excluded from auto-retrieval in `memory_project_context` but remain visible in `memory_search` and via `memory_get_belief` so users can inspect the conflict
+
+**Source-aware scoring:**
+- Signals from the same source within a short timeframe are decay-weighted (repeated reinforcement counts less)
+- Global source statistics are tracked: if a source has high conflict ratio across all its signals, its weight is reduced (`SOURCE_TRUST_FLOOR` = 0.1)
+- Confidence is computed per-atom: `confidence = clamp(0.5 + 0.5×S/(S+1) − 0.5×O/(O+1), 0.1, 0.99)` where S=support, O=opposition
+
+**Topic-specific trust (future, Phase 8+):**
+- Current model: one global trust weight per source
+- Planned: per-source, per-topic trust (e.g. "Model A is reliable for Python, unreliable for DevOps")
+- Requires more data to populate accurately; current implementation is sufficient for local single-user workflows
+
+#### What reviewers should know
+
+This is **not** a federated database design where "all replicas must converge on the same value." It is a **persistent belief system where disagreement is tracked, attributed, and inspected by the user**. When two LLMs disagree:
+
+1. Both beliefs are stored
+2. The disagreement is flagged and scored
+3. The user is alerted via dashboard or MCP signal inspection
+4. The user makes the final call (accept one, reject one, mark as ongoing research, etc.)
+
+This design prioritizes **transparency** and **user control** over automatic consensus.
+
+#### Open questions for Phase 8+
+
+- Should different models' memories live in separate scopes (e.g. `model:claude-sonnet`, `model:qwen3-8b`) or share a single `project:` scope? Current: shared scope, separate signals.
+- Should users be able to configure per-source trust weights, or should trust be entirely signal-derived? Current: entirely signal-derived.
+- Should federated peers be able to query beliefs from other brains, or only exchange evidence? Current: not implemented; Phase 8 will decide.
 
 ---
 

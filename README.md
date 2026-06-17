@@ -26,14 +26,30 @@ A local PostgreSQL + pgvector database with:
 
 ## The shared brain vision
 
-The goal is not just "compressed context for one chat." It's **LLM-agnostic persistent memory**:
+The goal is not just "compressed context for one chat." It's **LLM-agnostic persistent memory as a shared belief system**.
 
-- A conversation with GitHub Copilot in VS Code
-- A conversation with Claude in a browser
-- A conversation with a local Ollama model
-- A future model that doesn't exist yet
+### How it works
 
-All of them read and write to the **same store**. Decisions made in one conversation are available to all others. User preferences, project constraints, model-specific lessons — all in one place, under your control, on your hardware.
+Memories from any LLM aren't automatically treated as truth — they're **evidence**. Each candidate enters the same reconciliation pipeline that already handles conflict and supersession locally, now extended across sources:
+
+- **Agreement** — multiple sources confirm the same memory → confidence rises
+- **Disagreement** — sources conflict → tracked explicitly, visible, reasoned about over time  
+- **Provenance** — every memory linked to its source(s) with timestamps
+- **Confidence** — computed from agreement/disagreement signals, decaying over time
+
+Any MCP-compatible LLM can propose memories — Claude, Copilot, Ollama, future models — and they all write to the same store. Decisions made in one session are available to all others. User preferences, project constraints, model-specific lessons — all in one place, under your control, on your hardware.
+
+The system is **not** a "shared database that all models blindly trust." It's a **persistent belief system that tracks disagreement and surfaces it for human review**.
+
+---
+
+## What shared brain does NOT mean
+
+- **Not a global consensus engine** — disagreement is preserved and visible, never hidden by averaging or voting
+- **Not automatic synchronization across models** — proposals from one model don't automatically update memory until approved
+- **Not federated yet** — all memory is local; P2P or cloud federation may come later as opt-in layers (Phase 8)
+- **Not a fine-tuning replacement** — the models themselves don't retrain; the system compensates by retrieving persistent context
+- **Not secrets-agnostic** — you control what's stored; credentials and sensitive data must be filtered before writing
 
 ---
 
