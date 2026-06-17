@@ -81,7 +81,7 @@ Any Ollama model works. Any OpenAI-compatible API server works (LM Studio, llama
 ### 2. Clone and configure
 
 ```bash
-git clone <this-repo>
+git clone git@github.com:rickymm3/memory-layer.git
 cd memory-layer
 cp .env.example .env
 ```
