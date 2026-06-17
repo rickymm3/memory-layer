@@ -1,0 +1,129 @@
+{% extends 'base.html' %}
+{% block title %}Generate{% endblock %}
+{% block content %}
+<h2>Generate</h2>
+
+<div style="display:grid; grid-template-columns:1fr 1fr; gap:2rem; align-items:start;">
+
+  {# ── Image ── #}
+  <section>
+    <h3>🖼 Image</h3>
+    <p style="font-size:.82rem; color:var(--pico-muted-color); margin-bottom:.75rem;">
+      Provider: <code>{{ image_provider }}</code>
+    </p>
+
+    <form method="post" action="/generate/image" data-generate>
+      <label>
+        Prompt
+        <textarea name="prompt" required rows="3"
+          placeholder="A photorealistic cat reading a book in a cosy library…">{{ (last_image.prompt or '') if last_image }}</textarea>
+      </label>
+      <label>
+        Size
+        <select name="size">
+          <option value="1024x1024">1024 × 1024 — Square</option>
+          <option value="1792x1024">1792 × 1024 — Landscape</option>
+          <option value="1024x1792">1024 × 1792 — Portrait</option>
+        </select>
+      </label>
+      <button type="submit" {% if not image_available %}disabled{% endif %}>
+        Generate Image
+      </button>
+      {% if not image_available %}
+      <small style="color:var(--pico-muted-color); display:block; margin-top:.4rem;">
+        Add <code>OPENAI_API_KEY</code> or <code>REPLICATE_API_TOKEN</code> to <code>.env</code>
+        then <code>pip install openai</code> or <code>pip install replicate</code>.
+      </small>
+      {% endif %}
+    </form>
+
+    {% if last_image %}
+      {% if last_image.error %}
+      <article style="border-left:3px solid #ef4444; padding:.75rem 1rem; background:#fff1f2; margin-top:1rem; border-radius:.4rem;">
+        <strong>Error:</strong> {{ last_image.error }}
+      </article>
+      {% elif last_image.local_path %}
+      <figure style="margin-top:1rem;">
+        <a href="{{ url_for('static', filename=last_image.local_path) }}" target="_blank">
+          <img src="{{ url_for('static', filename=last_image.local_path) }}"
+               style="max-width:100%; border-radius:.5rem; display:block;"
+               alt="{{ last_image.prompt }}">
+        </a>
+        <figcaption style="font-size:.78rem; color:var(--pico-muted-color); margin-top:.4rem;">
+          {{ last_image.prompt }} &mdash; <em>{{ last_image.provider }}</em>
+        </figcaption>
+      </figure>
+      {% endif %}
+    {% endif %}
+  </section>
+
+  {# ── Video ── #}
+  <section>
+    <h3>🎬 Video</h3>
+    <p style="font-size:.82rem; color:var(--pico-muted-color); margin-bottom:.75rem;">
+      Provider: <code>{{ video_provider }}</code>
+    </p>
+
+    <form method="post" action="/generate/video" data-generate>
+      <label>
+        Prompt
+        <textarea name="prompt" required rows="3"
+          placeholder="A timelapse of a city skyline transitioning from day to night…">{{ (last_video.prompt or '') if last_video }}</textarea>
+      </label>
+      <button type="submit" {% if not video_available %}disabled{% endif %}>
+        Generate Video
+      </button>
+      {% if not video_available %}
+      <small style="color:var(--pico-muted-color); display:block; margin-top:.4rem;">
+        Add <code>REPLICATE_API_TOKEN</code> to <code>.env</code>
+        then <code>pip install replicate</code>.
+      </small>
+      {% endif %}
+    </form>
+
+    {% if last_video %}
+      {% if last_video.error %}
+      <article style="border-left:3px solid #ef4444; padding:.75rem 1rem; background:#fff1f2; margin-top:1rem; border-radius:.4rem;">
+        <strong>Error:</strong> {{ last_video.error }}
+      </article>
+      {% elif last_video.url %}
+      <figure style="margin-top:1rem;">
+        <video controls style="max-width:100%; border-radius:.5rem; display:block;">
+          <source src="{{ last_video.url }}" type="video/mp4">
+          <a href="{{ last_video.url }}" target="_blank">Download video</a>
+        </video>
+        <figcaption style="font-size:.78rem; color:var(--pico-muted-color); margin-top:.4rem;">
+          {{ last_video.prompt }} &mdash; <em>{{ last_video.provider }}</em>
+        </figcaption>
+      </figure>
+      {% endif %}
+    {% endif %}
+  </section>
+
+</div>
+
+{# ── Gallery ── #}
+{% if gallery %}
+<hr style="margin:2rem 0;">
+<h3>Recent Images</h3>
+<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(160px,1fr)); gap:.75rem;">
+  {% for img_path in gallery %}
+  <a href="{{ url_for('static', filename=img_path) }}" target="_blank"
+     style="display:block; border-radius:.4rem; overflow:hidden; line-height:0;">
+    <img src="{{ url_for('static', filename=img_path) }}"
+         style="width:100%; height:140px; object-fit:cover;" alt="">
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+<script>
+  document.querySelectorAll('form[data-generate]').forEach(function(form) {
+    form.addEventListener('submit', function() {
+      var btn = form.querySelector('button[type=submit]');
+      btn.setAttribute('aria-busy', 'true');
+      btn.textContent = 'Generating…';
+    });
+  });
+</script>
+{% endblock %}
