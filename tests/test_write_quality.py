@@ -145,3 +145,48 @@ def test_accept_signals_not_empty():
         memory_type="decision",
     )
     assert len(r.signals) > 0
+
+
+# ── Session-internal jargon guard ─────────────────────────────────────────────
+
+def test_reject_phase_number_jargon():
+    r = score_write_quality("Phase 0 introduced the context_size_log table.")
+    assert r.decision == "reject"
+    assert any("session-internal jargon" in s for s in r.signals)
+
+
+def test_reject_phase_letter_jargon():
+    r = score_write_quality("Phase A added memory_recent to the SessionStart hook.")
+    assert r.decision == "reject"
+
+
+def test_reject_sprint_jargon():
+    r = score_write_quality("Sprint 2 completed the atom relations graph feature.")
+    assert r.decision == "reject"
+
+
+def test_reject_as_discussed_jargon():
+    r = score_write_quality(
+        "As discussed earlier, all hook scripts now use python3 instead of jq."
+    )
+    assert r.decision == "reject"
+
+
+def test_accept_concrete_no_jargon():
+    # Same fact rewritten without jargon — should pass
+    r = score_write_quality(
+        "The memory-layer SessionStart hook calls memory_recent to inject "
+        "the last 5 atoms at session start, replacing jq with python3 for JSON parsing."
+    )
+    assert r.decision in ("accept", "downgrade")
+    assert all("session-internal jargon" not in s for s in r.signals)
+
+
+def test_phase_in_proper_noun_not_rejected():
+    # "Phase" appearing as part of a proper noun or unambiguous context
+    # that isn't "Phase N" should not trigger the guard
+    r = score_write_quality(
+        "The PreCompact hook injects top-10 atoms before conversation compaction "
+        "using .claude/hooks/memory-compact.sh and python3 for JSON output."
+    )
+    assert r.decision in ("accept", "downgrade")
