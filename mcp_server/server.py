@@ -38,6 +38,10 @@ from mcp_server.tools.reflect_turn import reflect_turn as _reflect_turn_impl
 from mcp_server.tools.ingest_transcript import ingest_conversation_transcript as _ingest_impl
 from mcp_server.tools.get_belief import get_belief_detail as _get_belief_impl
 from mcp_server.tools.log_turn import log_turn as _log_turn_impl
+from mcp_server.tools.stale_atoms import get_stale_atoms as _get_stale_atoms_impl
+from mcp_server.tools.find_duplicates import find_duplicate_atoms as _find_duplicates_impl
+from mcp_server.tools.link_atoms import link_atoms as _link_atoms_impl
+from mcp_server.tools.related_atoms import get_related_atoms as _related_atoms_impl
 
 mcp = FastMCP("memoryLayer")
 
@@ -701,6 +705,186 @@ def memory_log_turn(
     )
 
 
+@mcp.tool()
+def memory_stale_atoms(
+    days_threshold: int = 90,
+    min_disagreement: float = 0.4,
+    scope: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Surface memory atoms that may be stale and need review.
+
+    Three staleness signals are detected:
+    - **Contested**: disagreement_score >= min_disagreement — conflicting signals exist.
+    - **Old + unsupported**: older than days_threshold days with support_weight < 0.5.
+    - **Volatile + aged**: opinion/preference/lesson/belief type older than 30 days.
+
+    Use this periodically to prune your memory corpus and keep retrieval quality high.
+    Each result includes `staleness_reasons` explaining why the atom was flagged.
+
+    Args:
+        days_threshold: Age in days for low-support staleness. Default 90.
+        min_disagreement: Disagreement threshold for contested atoms. Default 0.4.
+        scope: Restrict to a specific scope. Omit for all scopes.
+        limit: Maximum results. Default 20.
+    """
+    return _get_stale_atoms_impl(
+        days_threshold=days_threshold,
+        min_disagreement=min_disagreement,
+        scope=scope,
+        limit=limit,
+    )
+
+
+@mcp.tool()
+def memory_find_duplicates(
+    similarity_threshold: float = 0.90,
+    scope: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Find near-duplicate memory atoms — candidates for consolidation.
+
+    Returns pairs of active atoms with cosine similarity above the threshold.
+    High similarity (>= 0.90) usually indicates the same fact stored twice with
+    different wording. Use this to consolidate redundant memories and reduce
+    retrieval noise.
+
+    After identifying duplicates, archive the weaker atom via lifecycle update
+    and add a reinforcement signal to the surviving atom.
+
+    Args:
+        similarity_threshold: Cosine similarity cutoff (0.5–1.0). Default 0.90.
+        scope: Restrict to a specific scope. Omit for all scopes.
+        limit: Maximum pairs to return. Default 20.
+    """
+    return _find_duplicates_impl(
+        similarity_threshold=similarity_threshold,
+        scope=scope,
+        limit=limit,
+    )
+
+
+@mcp.tool()
+def memory_link_atoms(
+    atom_a_id: str,
+    atom_b_id: str,
+    relation_type: str = "related",
+    confidence: float = 0.8,
+    source_key: str = "local_user",
+) -> dict[str, Any]:
+    """Create an explicit relation between two memory atoms (knowledge graph edge).
+
+    Use this to declare how two atoms are conceptually connected.  Valid
+    relation_types:
+      - supports     : atom_a provides evidence for atom_b
+      - contradicts  : atom_a conflicts with atom_b
+      - specializes  : atom_a is a more specific case of atom_b
+      - generalizes  : atom_a is a broader version of atom_b
+      - related      : general association (default)
+
+    Relations are traversable via memory_related to pull connected facts during
+    retrieval.  Relations are bidirectional by convention — both directions are
+    returned when traversing.
+
+    Args:
+        atom_a_id: Source atom UUID.
+        atom_b_id: Target atom UUID.
+        relation_type: One of the five types above. Default 'related'.
+        confidence: Confidence in the relation (0–1). Default 0.8.
+        source_key: Source identifier. Default 'local_user'.
+    """
+    return _link_atoms_impl(
+        atom_a_id=atom_a_id,
+        atom_b_id=atom_b_id,
+        relation_type=relation_type,
+        confidence=confidence,
+        source_key=source_key,
+    )
+
+
+@mcp.tool()
+def memory_related(
+    atom_id: str,
+    depth: int = 1,
+    relation_types: list[str] | None = None,
+) -> dict[str, Any]:
+    """Traverse the atom relations graph from a starting atom.
+
+    Returns neighbors up to `depth` hops away (max 3).  Traversal is
+    bidirectional — edges are followed in both directions from each frontier.
+
+    Use this after retrieval to pull additional context atoms that are
+    explicitly linked to a retrieved atom, even if their vector similarity
+    score is low.
+
+    Args:
+        atom_id: Starting atom UUID.
+        depth: Number of hops to traverse (1–3). Default 1.
+        relation_types: Optional list of relation types to filter by.
+            E.g. ['supports', 'specializes']. Omit to follow all types.
+    """
+    return _related_atoms_impl(
+        atom_id=atom_id,
+        depth=depth,
+        relation_types=relation_types,
+    )
+
+
+def _check_startup() -> None:
+    """Validate environment and initialise storage before serving requests."""
+    from pathlib import Path
+    from app.config import get_config
+    cfg = get_config()
+
+    # LLM provider check
+    has_provider = any([
+        cfg.anthropic_api_key,
+        cfg.openai_api_key,
+        cfg.openai_compat_base_url,
+        cfg.ollama_host,
+    ])
+    if not has_provider:
+        print(
+            "\n[memory-layer] ERROR: No LLM provider configured.\n"
+            "Set one of:\n"
+            "  ANTHROPIC_API_KEY=sk-ant-...   (Anthropic Claude)\n"
+            "  OPENAI_API_KEY=sk-...           (OpenAI)\n"
+            "  OPENAI_COMPAT_BASE_URL=http://localhost:1234  (local server)\n"
+            "  OLLAMA_HOST=http://localhost:11434             (Ollama)\n\n"
+            "Quick start with Anthropic + OpenAI embeddings:\n"
+            "  export ANTHROPIC_API_KEY=sk-ant-...\n"
+            "  export CHAT_PROVIDER=anthropic\n"
+            "  export OPENAI_API_KEY=sk-...\n"
+            "  export EMBEDDING_PROVIDER=openai\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # SQLite: auto-init on first run
+    if cfg.backend == "sqlite":
+        db_path = Path(cfg.sqlite_db_path)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        from app.sqlite_store import SQLiteStore
+        SQLiteStore(cfg.sqlite_db_path).init_db()
+        print(
+            f"[memory-layer] SQLite backend: {db_path}",
+            file=sys.stderr,
+        )
+    else:
+        # Postgres: verify connectivity
+        try:
+            import psycopg
+            psycopg.connect(cfg.database_url, connect_timeout=5).close()
+        except Exception as exc:
+            print(
+                f"\n[memory-layer] ERROR: Cannot connect to Postgres.\n"
+                f"  DATABASE_URL is set but connection failed: {exc}\n"
+                f"  Unset DATABASE_URL to use the local SQLite backend instead.\n",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Memory Layer MCP Server")
@@ -715,6 +899,8 @@ def main() -> None:
     parser.add_argument("--host", default="0.0.0.0",
                         help="Bind host for HTTP transports (default: 0.0.0.0)")
     args, _ = parser.parse_known_args()
+
+    _check_startup()
 
     if args.transport == "stdio":
         print("Starting memoryLayer MCP server (stdio)...", file=sys.stderr)

@@ -171,6 +171,18 @@ CREATE TABLE IF NOT EXISTS belief_revision_log (
     source_key TEXT,
     revised_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS memory_atom_relations (
+    id TEXT PRIMARY KEY,
+    atom_a_id TEXT NOT NULL REFERENCES memory_atoms(id) ON DELETE CASCADE,
+    atom_b_id TEXT NOT NULL REFERENCES memory_atoms(id) ON DELETE CASCADE,
+    relation_type TEXT NOT NULL DEFAULT 'related',
+    confidence REAL NOT NULL DEFAULT 0.8,
+    created_at TEXT NOT NULL,
+    source_key TEXT NOT NULL DEFAULT 'local_user'
+);
+CREATE INDEX IF NOT EXISTS idx_atom_relations_a ON memory_atom_relations(atom_a_id);
+CREATE INDEX IF NOT EXISTS idx_atom_relations_b ON memory_atom_relations(atom_b_id);
 """
 
 
@@ -934,6 +946,18 @@ class SQLiteStore:
                 """
             ).fetchall()
 
+            graph_stats = conn.execute(
+                """
+                SELECT COUNT(*) AS total_relations,
+                       COUNT(DISTINCT atom_a_id) + COUNT(DISTINCT atom_b_id) AS atoms_in_graph
+                FROM memory_atom_relations;
+                """
+            ).fetchone()
+
+            relation_type_rows = conn.execute(
+                "SELECT relation_type, COUNT(*) FROM memory_atom_relations GROUP BY relation_type;"
+            ).fetchall()
+
         lifecycle = {row[0]: int(row[1]) for row in lifecycle_rows}
         active = int(active_stats[0] or 0)
 
@@ -969,6 +993,11 @@ class SQLiteStore:
                 "coverage_pct": pct(int(signal_stats[0] or 0)),
             },
             "signal_activity_14d": {row[0]: int(row[1]) for row in recent_signals},
+            "graph": {
+                "total_relations": int(graph_stats[0] or 0),
+                "atoms_in_graph": int(graph_stats[1] or 0),
+                "relation_types": {row[0]: int(row[1]) for row in relation_type_rows},
+            },
         }
 
     def list_recent(self, limit: int = 10, scope: str | None = None) -> list[dict[str, Any]]:
@@ -1215,6 +1244,108 @@ class SQLiteStore:
 
         pairs.sort(key=lambda x: x["similarity"], reverse=True)
         return pairs[:limit]
+
+    # ── Atom relations graph ──────────────────────────────────────────────────
+
+    _VALID_RELATION_TYPES: frozenset[str] = frozenset({
+        "supports", "contradicts", "specializes", "generalizes", "related",
+    })
+
+    def link_atoms(
+        self,
+        atom_a_id: str,
+        atom_b_id: str,
+        relation_type: str = "related",
+        confidence: float = 0.8,
+        source_key: str = "local_user",
+    ) -> str:
+        """Create a directed relation from atom_a to atom_b.  Returns the relation id."""
+        if relation_type not in self._VALID_RELATION_TYPES:
+            raise ValueError(
+                f"Invalid relation_type '{relation_type}'. "
+                f"Must be one of: {sorted(self._VALID_RELATION_TYPES)}"
+            )
+        rel_id = _uid()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO memory_atom_relations
+                (id, atom_a_id, atom_b_id, relation_type, confidence, created_at, source_key)
+                VALUES (?,?,?,?,?,?,?)
+                """,
+                (rel_id, atom_a_id, atom_b_id, relation_type,
+                 float(confidence), _now(), source_key),
+            )
+        return rel_id
+
+    def get_related_atoms(
+        self,
+        atom_id: str,
+        depth: int = 1,
+        relation_types: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return atoms related to atom_id up to `depth` hops.
+
+        Relations are traversed bidirectionally (a→b and b→a both count).
+        """
+        depth = max(1, min(depth, 3))
+        visited: set[str] = {atom_id}
+        frontier: set[str] = {atom_id}
+        results: list[dict[str, Any]] = []
+
+        type_filter = ""
+        type_params: list[Any] = []
+        if relation_types:
+            valid = [r for r in relation_types if r in self._VALID_RELATION_TYPES]
+            if valid:
+                placeholders = ",".join("?" * len(valid))
+                type_filter = f"AND r.relation_type IN ({placeholders})"
+                type_params = list(valid)
+
+        with self._connect() as conn:
+            for _ in range(depth):
+                if not frontier:
+                    break
+                placeholders = ",".join("?" * len(frontier))
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        r.id, r.relation_type, r.confidence, r.source_key,
+                        CASE WHEN r.atom_a_id IN ({placeholders})
+                             THEN r.atom_b_id ELSE r.atom_a_id END AS neighbor_id,
+                        a.content, a.memory_type, a.scope, a.confidence AS atom_confidence,
+                        a.lifecycle_status
+                    FROM memory_atom_relations r
+                    JOIN memory_atoms a ON
+                        a.id = CASE WHEN r.atom_a_id IN ({placeholders})
+                                    THEN r.atom_b_id ELSE r.atom_a_id END
+                    WHERE (r.atom_a_id IN ({placeholders}) OR r.atom_b_id IN ({placeholders}))
+                      AND a.lifecycle_status IN ('active', NULL)
+                      {type_filter}
+                    """,
+                    list(frontier) * 4 + type_params,
+                ).fetchall()
+
+                next_frontier: set[str] = set()
+                for row in rows:
+                    neighbor_id = row[4]
+                    if neighbor_id not in visited:
+                        visited.add(neighbor_id)
+                        next_frontier.add(neighbor_id)
+                        results.append({
+                            "relation_id": row[0],
+                            "relation_type": row[1],
+                            "relation_confidence": float(row[2]),
+                            "source_key": row[3],
+                            "id": neighbor_id,
+                            "content": row[5],
+                            "memory_type": row[6] or "fact",
+                            "scope": row[7],
+                            "atom_confidence": float(row[8]) if row[8] is not None else 0.5,
+                        })
+                frontier = next_frontier
+
+        return results
 
     def list_task_runs_db(
         self, scope: str | None = None, outcome: str | None = None, limit: int = 10

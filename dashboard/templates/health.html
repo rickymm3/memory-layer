@@ -205,4 +205,32 @@
   <code>make list</code> + <code>make delete</code>.
 </p>
 {% endif %}
+
+{# ── Knowledge graph stats ── #}
+<section style="margin-top:1.5rem;">
+  <h4>Knowledge graph
+    <small style="font-weight:400;color:var(--pico-muted-color)">
+      — link atoms via <code>memory_link_atoms</code> tool
+    </small>
+  </h4>
+  {% if r.graph.total_relations == 0 %}
+  <p style="color:var(--pico-muted-color);font-size:.88rem;">
+    No relations yet. Use <code>memory_link_atoms(atom_a_id, atom_b_id, "supports")</code> to start building the graph.
+  </p>
+  {% else %}
+  <p>
+    <strong>{{ r.graph.total_relations }}</strong> relation(s) across
+    <strong>{{ r.graph.atoms_in_graph }}</strong> atom(s) — graph density
+    <strong>{{ "%.1f"|format(r.graph.total_relations / [r.active_atoms, 1]|max * 100) }}%</strong>
+    of active atoms have at least one link.
+  </p>
+  {% if r.graph.relation_types %}
+  <div>
+    {% for rtype, cnt in r.graph.relation_types.items() %}
+      <span class="badge">{{ rtype }}: {{ cnt }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endif %}
+</section>
 {% endblock %}

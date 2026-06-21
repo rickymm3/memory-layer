@@ -1407,6 +1407,20 @@ class MemoryStore:
                 )
                 recent_signals = cur.fetchall()
 
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS total_relations,
+                           COUNT(DISTINCT atom_a_id) + COUNT(DISTINCT atom_b_id) AS atoms_in_graph
+                    FROM memory_atom_relations;
+                    """
+                )
+                graph_stats = cur.fetchone()
+
+                cur.execute(
+                    "SELECT relation_type, COUNT(*) FROM memory_atom_relations GROUP BY relation_type;"
+                )
+                relation_type_rows = cur.fetchall()
+
         lifecycle = {row[0]: int(row[1]) for row in lifecycle_rows}
         active = int(active_stats[0] or 0)
 
@@ -1442,6 +1456,11 @@ class MemoryStore:
                 "coverage_pct": pct(int(signal_stats[0] or 0)),
             },
             "signal_activity_14d": {row[0]: int(row[1]) for row in recent_signals},
+            "graph": {
+                "total_relations": int(graph_stats[0] or 0) if graph_stats else 0,
+                "atoms_in_graph": int(graph_stats[1] or 0) if graph_stats else 0,
+                "relation_types": {row[0]: int(row[1]) for row in relation_type_rows},
+            },
         }
 
     def list_recent(
@@ -1641,6 +1660,112 @@ class MemoryStore:
             }
             for row in rows
         ]
+
+    # ── Atom relations graph ──────────────────────────────────────────────────
+
+    _VALID_RELATION_TYPES: frozenset[str] = frozenset({
+        "supports", "contradicts", "specializes", "generalizes", "related",
+    })
+
+    def link_atoms(
+        self,
+        atom_a_id: str,
+        atom_b_id: str,
+        relation_type: str = "related",
+        confidence: float = 0.8,
+        source_key: str = "local_user",
+    ) -> str:
+        """Create a directed relation from atom_a to atom_b.  Returns the relation id."""
+        if relation_type not in self._VALID_RELATION_TYPES:
+            raise ValueError(
+                f"Invalid relation_type '{relation_type}'. "
+                f"Must be one of: {sorted(self._VALID_RELATION_TYPES)}"
+            )
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO memory_atom_relations
+                        (atom_a_id, atom_b_id, relation_type, confidence, source_key)
+                    VALUES (%s::uuid, %s::uuid, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    RETURNING id::text
+                    """,
+                    (atom_a_id, atom_b_id, relation_type, float(confidence), source_key),
+                )
+                row = cur.fetchone()
+                return row[0] if row else ""
+
+    def get_related_atoms(
+        self,
+        atom_id: str,
+        depth: int = 1,
+        relation_types: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return atoms related to atom_id up to `depth` hops (max 3)."""
+        depth = max(1, min(depth, 3))
+        visited: set[str] = {atom_id}
+        frontier: set[str] = {atom_id}
+        results: list[dict[str, Any]] = []
+
+        valid_types = (
+            [r for r in relation_types if r in self._VALID_RELATION_TYPES]
+            if relation_types else None
+        )
+
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                for _ in range(depth):
+                    if not frontier:
+                        break
+                    frontier_list = list(frontier)
+                    type_clause = ""
+                    extra_params: list[Any] = []
+                    if valid_types:
+                        placeholders = ",".join(["%s"] * len(valid_types))
+                        type_clause = f"AND r.relation_type IN ({placeholders})"
+                        extra_params = list(valid_types)
+
+                    cur.execute(
+                        f"""
+                        SELECT
+                            r.id::text, r.relation_type, r.confidence, r.source_key,
+                            CASE WHEN r.atom_a_id = ANY(%s::uuid[])
+                                 THEN r.atom_b_id::text ELSE r.atom_a_id::text END AS neighbor_id,
+                            a.content, a.memory_type, a.scope, a.confidence AS atom_confidence
+                        FROM memory_atom_relations r
+                        JOIN memory_atoms a ON
+                            a.id = CASE WHEN r.atom_a_id = ANY(%s::uuid[])
+                                        THEN r.atom_b_id ELSE r.atom_a_id END
+                        WHERE (r.atom_a_id = ANY(%s::uuid[]) OR r.atom_b_id = ANY(%s::uuid[]))
+                          AND (a.lifecycle_status IS NULL OR a.lifecycle_status = 'active')
+                          {type_clause}
+                        """,
+                        [frontier_list, frontier_list, frontier_list, frontier_list]
+                        + extra_params,
+                    )
+                    rows = cur.fetchall()
+
+                    next_frontier: set[str] = set()
+                    for row in rows:
+                        neighbor_id = row[4]
+                        if neighbor_id not in visited:
+                            visited.add(neighbor_id)
+                            next_frontier.add(neighbor_id)
+                            results.append({
+                                "relation_id": row[0],
+                                "relation_type": row[1],
+                                "relation_confidence": float(row[2]),
+                                "source_key": row[3],
+                                "id": neighbor_id,
+                                "content": row[5],
+                                "memory_type": row[6] or "fact",
+                                "scope": row[7],
+                                "atom_confidence": float(row[8]) if row[8] is not None else 0.5,
+                            })
+                    frontier = next_frontier
+
+        return results
 
     def list_task_runs_db(
         self,

@@ -444,7 +444,7 @@ def test_health_report_returns_expected_keys(store: SQLiteStore):
         "conflict_rate", "orphan_rate", "contested_count", "orphan_count",
         "avg_confidence", "avg_disagreement", "scope_distribution",
         "type_distribution", "top_contested", "signal_coverage",
-        "signal_activity_14d",
+        "signal_activity_14d", "graph",
     }
     for key in required:
         assert key in report, f"Missing key: {key}"
@@ -510,3 +510,89 @@ def test_health_report_type_distribution(store: SQLiteStore):
     )
     report = store.health_report()
     assert "decision" in report["type_distribution"]
+
+
+# ── atom relations graph ───────────────────────────────────────────────────────
+
+def _insert_atom(store: SQLiteStore, atom_id: str, content: str) -> str:
+    """Insert a bare atom row for graph tests — returns atom_id."""
+    import json
+    emb = _FakeEmbedder().embed_text(content)
+    with store._connect() as conn:
+        conn.execute(
+            "INSERT INTO memory_atoms "
+            "(id, content, memory_type, scope, confidence, importance, embedding_model, "
+            "embedding, created_at, lifecycle_status) "
+            "VALUES (?,?,?,?,?,?,?,?,datetime('now'),?)",
+            (atom_id, content, "fact", "project:test",
+             0.8, 0.7, "fake", json.dumps(emb), "active"),
+        )
+    return atom_id
+
+
+def test_link_atoms_returns_relation_id(store: SQLiteStore):
+    """link_atoms() must return a non-empty UUID string."""
+    _insert_atom(store, "graph_a", "Postgres is the primary database.")
+    _insert_atom(store, "graph_b", "DATABASE_URL must be set for Postgres.")
+    rel_id = store.link_atoms("graph_a", "graph_b", relation_type="supports")
+    assert rel_id and isinstance(rel_id, str)
+
+
+def test_link_atoms_invalid_type_raises(store: SQLiteStore):
+    """link_atoms() must raise ValueError for unknown relation types."""
+    _insert_atom(store, "inv_a", "atom a")
+    _insert_atom(store, "inv_b", "atom b")
+    with pytest.raises(ValueError, match="Invalid relation_type"):
+        store.link_atoms("inv_a", "inv_b", relation_type="invented_type")
+
+
+def test_get_related_atoms_finds_neighbor(store: SQLiteStore):
+    """get_related_atoms() must return the atom linked via link_atoms()."""
+    _insert_atom(store, "rel_src", "source atom")
+    _insert_atom(store, "rel_tgt", "target atom is related")
+    store.link_atoms("rel_src", "rel_tgt", relation_type="related")
+    neighbors = store.get_related_atoms("rel_src", depth=1)
+    ids = [n["id"] for n in neighbors]
+    assert "rel_tgt" in ids
+
+
+def test_get_related_atoms_bidirectional(store: SQLiteStore):
+    """Traversal is bidirectional: querying the target finds the source."""
+    _insert_atom(store, "bi_src", "bidirectional source")
+    _insert_atom(store, "bi_tgt", "bidirectional target")
+    store.link_atoms("bi_src", "bi_tgt", relation_type="supports")
+    neighbors = store.get_related_atoms("bi_tgt", depth=1)
+    ids = [n["id"] for n in neighbors]
+    assert "bi_src" in ids
+
+
+def test_get_related_atoms_two_hop(store: SQLiteStore):
+    """depth=2 traversal should return atoms two hops away."""
+    _insert_atom(store, "hop_a", "hop atom A")
+    _insert_atom(store, "hop_b", "hop atom B")
+    _insert_atom(store, "hop_c", "hop atom C")
+    store.link_atoms("hop_a", "hop_b", relation_type="related")
+    store.link_atoms("hop_b", "hop_c", relation_type="related")
+    neighbors = store.get_related_atoms("hop_a", depth=2)
+    ids = [n["id"] for n in neighbors]
+    assert "hop_b" in ids
+    assert "hop_c" in ids
+
+
+def test_get_related_atoms_returns_required_fields(store: SQLiteStore):
+    """Each neighbor dict must have id, content, relation_type, atom_confidence."""
+    _insert_atom(store, "field_src", "field source atom")
+    _insert_atom(store, "field_tgt", "field target atom")
+    store.link_atoms("field_src", "field_tgt", relation_type="generalizes")
+    neighbors = store.get_related_atoms("field_src", depth=1)
+    assert neighbors, "Expected at least one neighbor"
+    n = neighbors[0]
+    for key in ("id", "content", "relation_type", "atom_confidence", "relation_id"):
+        assert key in n, f"Missing key: {key}"
+
+
+def test_get_related_atoms_empty_when_no_links(store: SQLiteStore):
+    """An atom with no relations returns an empty list."""
+    _insert_atom(store, "lonely", "isolated atom with no relations")
+    neighbors = store.get_related_atoms("lonely", depth=1)
+    assert neighbors == []
