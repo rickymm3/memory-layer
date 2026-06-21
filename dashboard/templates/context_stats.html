@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}Context Stats{% endblock %}
+
+{% block content %}
+<style>
+  .stat-card {
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: .5rem;
+    padding: 1rem 1.25rem;
+    text-align: center;
+  }
+  .stat-card .value {
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1.1;
+    display: block;
+  }
+  .stat-card .label {
+    font-size: .75rem;
+    color: var(--pico-muted-color);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    margin-top: .3rem;
+    display: block;
+  }
+  .ok   { color: #166534; }
+  .warn { color: #854d0e; }
+  .bad  { color: #991b1b; }
+  .cards-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.75rem;
+  }
+  .sparkline {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 60px;
+    margin: .5rem 0 1rem;
+  }
+  .spark-col { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 1; }
+  .spark-bar { width: 100%; border-radius: 2px 2px 0 0; min-height: 2px; }
+  .spark-user { background: var(--pico-primary); opacity: .8; }
+  .spark-ret  { background: #f59e0b; opacity: .7; }
+  .spark-date { font-size: .6rem; color: var(--pico-muted-color); writing-mode: vertical-rl; transform: rotate(180deg); }
+  .legend { display: flex; gap: 1.2rem; margin-bottom: 1rem; font-size: .8rem; }
+  .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: .3rem; }
+  .dot-user { background: var(--pico-primary); }
+  .dot-ret  { background: #f59e0b; }
+  .fat-table { width: 100%; }
+  .fat-table th, .fat-table td { padding: .45rem .6rem; font-size: .82rem; }
+  .eff-bar { display: inline-block; height: 8px; border-radius: 4px; background: #ef4444; vertical-align: middle; }
+</style>
+
+<hgroup>
+  <h2>Context Efficiency</h2>
+  <p>Tracks how much context the memory layer injects and how much is actually used. Low efficiency = fat to trim.</p>
+</hgroup>
+
+{% if r.get('error') %}
+<article class="warn">
+  <strong>Error loading stats:</strong> {{ r.error }}
+</article>
+{% endif %}
+
+{# ── Summary cards ── #}
+<div class="cards-row">
+  <div class="stat-card">
+    {% set eff = r.avg_retrieval_efficiency %}
+    {% if eff is none %}
+      <span class="value" style="color:var(--pico-muted-color)">—</span>
+      <span class="label">Retrieval Efficiency</span>
+    {% elif eff >= 0.6 %}
+      <span class="value ok">{{ "%.0f"|format(eff * 100) }}%</span>
+      <span class="label">Retrieval Efficiency</span>
+    {% elif eff >= 0.3 %}
+      <span class="value warn">{{ "%.0f"|format(eff * 100) }}%</span>
+      <span class="label">Retrieval Efficiency</span>
+    {% else %}
+      <span class="value bad">{{ "%.0f"|format(eff * 100) }}%</span>
+      <span class="label">Retrieval Efficiency</span>
+    {% endif %}
+  </div>
+
+  <div class="stat-card">
+    <span class="value">{{ r.fat_atoms | length }}</span>
+    <span class="label">Fat Atoms (&lt;20% used)</span>
+  </div>
+
+  <div class="stat-card">
+    {% set trend = r.daily_token_trend %}
+    {% if trend %}
+      <span class="value">{{ trend[-1].avg_user_tokens }}</span>
+      <span class="label">Avg User Tokens (latest day)</span>
+    {% else %}
+      <span class="value" style="color:var(--pico-muted-color)">—</span>
+      <span class="label">Avg User Tokens</span>
+    {% endif %}
+  </div>
+
+  <div class="stat-card">
+    {% if trend %}
+      <span class="value">{{ trend[-1].avg_retrieved_tokens }}</span>
+      <span class="label">Avg Retrieved Tokens (latest day)</span>
+    {% else %}
+      <span class="value" style="color:var(--pico-muted-color)">—</span>
+      <span class="label">Avg Retrieved Tokens</span>
+    {% endif %}
+  </div>
+</div>
+
+{# ── Token Trend Sparkline ── #}
+<article>
+  <header><strong>14-Day Token Trend</strong></header>
+  {% set trend = r.daily_token_trend %}
+  {% if trend %}
+    {% set max_tokens = trend | map(attribute='avg_user_tokens') | list | max %}
+    {% set max_tokens = [max_tokens, 1] | max %}
+    <div class="legend">
+      <span><span class="legend-dot dot-user"></span>User tokens (est.)</span>
+      <span><span class="legend-dot dot-ret"></span>Retrieved atom tokens (est.)</span>
+    </div>
+    <div class="sparkline">
+      {% for day in trend %}
+        {% set user_h = ((day.avg_user_tokens / max_tokens) * 56) | int %}
+        {% set ret_h  = ((day.avg_retrieved_tokens / max_tokens) * 56) | int %}
+        <div class="spark-col">
+          <div class="spark-bar spark-user" style="height: {{ [user_h, 2]|max }}px;" title="{{ day.date }}: ~{{ day.avg_user_tokens }} user tokens"></div>
+          <div class="spark-bar spark-ret"  style="height: {{ [ret_h, 2]|max }}px;"  title="{{ day.date }}: ~{{ day.avg_retrieved_tokens }} retrieved tokens"></div>
+          <div class="spark-date">{{ day.date[-5:] }}</div>
+        </div>
+      {% endfor %}
+    </div>
+    <small style="color:var(--pico-muted-color)">Token counts estimated at 4 chars per token. Retrieved tokens reflect atom IDs × 4 (proxy until content lengths are tracked).</small>
+  {% else %}
+    <p style="color:var(--pico-muted-color)"><em>No data yet. Call memory_log_turn with session_id to start tracking.</em></p>
+  {% endif %}
+</article>
+
+{# ── Fat Atoms Table ── #}
+<article>
+  <header>
+    <strong>Fat Atoms</strong>
+    <small style="font-weight:normal; color:var(--pico-muted-color)"> — retrieved in 5+ turns, used in &lt;20% of them. These inflate context without contributing.</small>
+  </header>
+  {% if r.fat_atoms %}
+    <div style="overflow-x:auto">
+      <table class="fat-table">
+        <thead>
+          <tr>
+            <th>Atom ID</th>
+            <th>Content preview</th>
+            <th>Retrieved</th>
+            <th>Used</th>
+            <th>Efficiency</th>
+            <th>Waste bar</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for fa in r.fat_atoms %}
+          <tr>
+            <td><code style="font-size:.7rem">{{ fa.atom_id[:8] }}…</code></td>
+            <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ fa.content_preview }}</td>
+            <td>{{ fa.retrieved_count }}</td>
+            <td>{{ fa.used_count }}</td>
+            <td>
+              {% if fa.efficiency_pct == 0 %}
+                <span class="bad">0%</span>
+              {% else %}
+                <span class="warn">{{ fa.efficiency_pct }}%</span>
+              {% endif %}
+            </td>
+            <td>
+              {% set waste_w = ((1 - fa.efficiency_pct / 100) * 80) | int %}
+              <span class="eff-bar" style="width: {{ waste_w }}px;"></span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <small style="color:var(--pico-muted-color)">These atoms are candidates for improved retrieval tuning, archiving, or consolidation with more specific atoms.</small>
+  {% else %}
+    <p style="color:var(--pico-muted-color)"><em>No fat atoms detected in the last 30 days. Either retrieval is efficient, or not enough turns have been logged yet (need 5+ retrievals per atom).</em></p>
+  {% endif %}
+</article>
+
+{% endblock %}

@@ -596,3 +596,65 @@ def test_get_related_atoms_empty_when_no_links(store: SQLiteStore):
     _insert_atom(store, "lonely", "isolated atom with no relations")
     neighbors = store.get_related_atoms("lonely", depth=1)
     assert neighbors == []
+
+
+# ── context_size_log / context_efficiency tests ───────────────────────────────
+
+def test_log_context_metrics_returns_id(store: SQLiteStore):
+    log_id = store.log_context_metrics(
+        session_id="sess-001",
+        turn_number=1,
+        retrieved_atom_count=5,
+        used_atom_count=3,
+        retrieved_atom_tokens=200,
+        user_tokens=120,
+        assistant_tokens=340,
+    )
+    assert isinstance(log_id, str) and log_id
+
+
+def test_log_context_metrics_none_session_ok(store: SQLiteStore):
+    log_id = store.log_context_metrics(
+        session_id=None,
+        turn_number=0,
+        retrieved_atom_count=0,
+        used_atom_count=0,
+        retrieved_atom_tokens=0,
+        user_tokens=50,
+        assistant_tokens=80,
+    )
+    assert log_id
+
+
+def test_context_efficiency_returns_expected_keys(store: SQLiteStore):
+    report = store.context_efficiency()
+    for key in ("avg_retrieval_efficiency", "fat_atoms", "daily_token_trend"):
+        assert key in report, f"Missing key: {key}"
+
+
+def test_context_efficiency_empty_store(store: SQLiteStore):
+    report = store.context_efficiency()
+    assert report["avg_retrieval_efficiency"] is None
+    assert report["fat_atoms"] == []
+    assert report["daily_token_trend"] == []
+
+
+def test_context_efficiency_calculates_avg(store: SQLiteStore):
+    store.log_context_metrics("s1", 1, retrieved_atom_count=10, used_atom_count=4,
+                              retrieved_atom_tokens=400, user_tokens=100, assistant_tokens=200)
+    store.log_context_metrics("s1", 2, retrieved_atom_count=8, used_atom_count=8,
+                              retrieved_atom_tokens=320, user_tokens=90, assistant_tokens=180)
+    report = store.context_efficiency()
+    assert report["avg_retrieval_efficiency"] is not None
+    # avg of (4/10) and (8/8) = avg(0.4, 1.0) = 0.7
+    assert abs(report["avg_retrieval_efficiency"] - 0.7) < 0.01
+
+
+def test_context_efficiency_trend_populated(store: SQLiteStore):
+    store.log_context_metrics("s1", 1, 3, 1, 120, 80, 160)
+    report = store.context_efficiency()
+    assert len(report["daily_token_trend"]) >= 1
+    day = report["daily_token_trend"][0]
+    assert "date" in day
+    assert "avg_user_tokens" in day
+    assert "avg_retrieved_tokens" in day

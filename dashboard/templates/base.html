@@ -215,6 +215,10 @@
           {% if request.endpoint == 'health' %}aria-current="page"{% endif %}>
           🩺 Health
         </a>
+        <a href="/context-stats"
+          {% if request.endpoint == 'context_stats' %}aria-current="page"{% endif %}>
+          📊 Context
+        </a>
       </div>
 
       <hr>

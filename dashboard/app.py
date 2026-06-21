@@ -871,6 +871,20 @@ def health():
     return render_template("health.html", r=report)
 
 
+@app.route("/context-stats")
+def context_stats():
+    try:
+        report = get_store().context_efficiency()
+    except Exception as e:
+        report = {
+            "error": str(e),
+            "avg_retrieval_efficiency": None,
+            "fat_atoms": [],
+            "daily_token_trend": [],
+        }
+    return render_template("context_stats.html", r=report)
+
+
 @app.route("/generate")
 def generate():
     img_provider = get_image_provider()

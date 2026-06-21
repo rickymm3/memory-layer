@@ -2105,6 +2105,128 @@ class MemoryStore:
             "status": "logged",
         }
 
+    def log_context_metrics(
+        self,
+        session_id: str | None,
+        turn_number: int,
+        retrieved_atom_count: int,
+        used_atom_count: int,
+        retrieved_atom_tokens: int,
+        user_tokens: int,
+        assistant_tokens: int,
+    ) -> str:
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO context_size_log
+                        (session_id, turn_number, retrieved_atom_count, used_atom_count,
+                         retrieved_atom_tokens, user_tokens, assistant_tokens)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id;
+                    """,
+                    (session_id, turn_number, retrieved_atom_count, used_atom_count,
+                     retrieved_atom_tokens, user_tokens, assistant_tokens),
+                )
+                log_id = str(cur.fetchone()[0])
+            conn.commit()
+        return log_id
+
+    def context_efficiency(self) -> dict[str, Any]:
+        import json as _json
+
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT AVG(used_atom_count::REAL / NULLIF(retrieved_atom_count, 0))
+                    FROM context_size_log
+                    WHERE retrieved_atom_count > 0
+                      AND created_at >= now() - INTERVAL '30 days'
+                    """
+                )
+                row = cur.fetchone()
+                avg_efficiency = float(row[0]) if row and row[0] is not None else None
+
+                cur.execute(
+                    """
+                    SELECT created_at::date AS day,
+                           AVG(user_tokens)::INTEGER AS avg_user,
+                           AVG(retrieved_atom_tokens)::INTEGER AS avg_retrieved
+                    FROM context_size_log
+                    WHERE created_at >= now() - INTERVAL '14 days'
+                    GROUP BY day
+                    ORDER BY day
+                    """
+                )
+                trend_rows = cur.fetchall()
+
+                cur.execute(
+                    """
+                    SELECT retrieved_atom_ids, used_atom_ids
+                    FROM runtime_context_traces
+                    WHERE created_at >= now() - INTERVAL '30 days'
+                    """
+                )
+                traces = cur.fetchall()
+
+        daily_token_trend = [
+            {
+                "date": str(r[0]),
+                "avg_user_tokens": r[1] or 0,
+                "avg_retrieved_tokens": r[2] or 0,
+            }
+            for r in trend_rows
+        ]
+
+        retrieved_counts: dict[str, int] = {}
+        used_counts: dict[str, int] = {}
+        for retrieved_val, used_val in traces:
+            try:
+                retrieved = retrieved_val if isinstance(retrieved_val, list) else _json.loads(retrieved_val or "[]")
+                used = used_val if isinstance(used_val, list) else _json.loads(used_val or "[]")
+            except Exception:
+                continue
+            for aid in retrieved:
+                retrieved_counts[str(aid)] = retrieved_counts.get(str(aid), 0) + 1
+            for aid in used:
+                used_counts[str(aid)] = used_counts.get(str(aid), 0) + 1
+
+        fat_atoms = []
+        for atom_id, ret_count in retrieved_counts.items():
+            if ret_count < 5:
+                continue
+            used_count = used_counts.get(atom_id, 0)
+            efficiency_pct = (used_count / ret_count) * 100
+            if efficiency_pct < 20:
+                fat_atoms.append({
+                    "atom_id": atom_id,
+                    "retrieved_count": ret_count,
+                    "used_count": used_count,
+                    "efficiency_pct": round(efficiency_pct, 1),
+                    "content_preview": "",
+                })
+        fat_atoms.sort(key=lambda x: x["efficiency_pct"])
+
+        if fat_atoms:
+            with psycopg.connect(self.config.database_url) as conn:
+                with conn.cursor() as cur:
+                    ids = [fa["atom_id"] for fa in fat_atoms[:20]]
+                    cur.execute(
+                        "SELECT id::text, content FROM memory_atoms WHERE id::text = ANY(%s)",
+                        (ids,),
+                    )
+                    content_map = {str(r[0]): r[1] for r in cur.fetchall()}
+            for fa in fat_atoms[:20]:
+                c = content_map.get(fa["atom_id"], "")
+                fa["content_preview"] = (c[:80] + "…") if len(c) > 80 else c
+
+        return {
+            "avg_retrieval_efficiency": avg_efficiency,
+            "fat_atoms": fat_atoms[:20],
+            "daily_token_trend": daily_token_trend,
+        }
+
     def get_and_claim_proposal(
         self, proposal_id: str, approval_token: str
     ) -> dict[str, Any]:

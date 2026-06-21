@@ -39,6 +39,8 @@ def log_turn(
     confidence: float = 0.85,
     reasoning: str = "",
     source: str = "mcp_copilot",
+    session_id: str | None = None,
+    turn_number: int = 0,
 ) -> dict[str, Any]:
     """Write one conversation turn to the prompt-history audit tables."""
     retrieved = list(retrieved_atom_ids or [])
@@ -64,6 +66,21 @@ def log_turn(
         source=source,
         final_action=final_action,
     )
+
+    # Log context size metrics for efficiency tracking (fat atom detection).
+    if hasattr(store, "log_context_metrics"):
+        try:
+            store.log_context_metrics(
+                session_id=session_id,
+                turn_number=turn_number,
+                retrieved_atom_count=len(retrieved),
+                used_atom_count=len(used),
+                retrieved_atom_tokens=sum(len(aid) * 4 for aid in retrieved),
+                user_tokens=len(user_message) // 4,
+                assistant_tokens=len(assistant_response) // 4,
+            )
+        except Exception:
+            pass  # never crash log_turn over metrics
 
     # Auto-link co-used atoms: atoms used together in the same response
     # share implicit context.  Create bidirectional "related" edges between

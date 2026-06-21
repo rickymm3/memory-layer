@@ -183,6 +183,19 @@ CREATE TABLE IF NOT EXISTS memory_atom_relations (
 );
 CREATE INDEX IF NOT EXISTS idx_atom_relations_a ON memory_atom_relations(atom_a_id);
 CREATE INDEX IF NOT EXISTS idx_atom_relations_b ON memory_atom_relations(atom_b_id);
+
+CREATE TABLE IF NOT EXISTS context_size_log (
+    id TEXT PRIMARY KEY,
+    session_id TEXT,
+    turn_number INTEGER NOT NULL DEFAULT 0,
+    retrieved_atom_count INTEGER NOT NULL DEFAULT 0,
+    used_atom_count INTEGER NOT NULL DEFAULT 0,
+    retrieved_atom_tokens INTEGER NOT NULL DEFAULT 0,
+    user_tokens INTEGER NOT NULL DEFAULT 0,
+    assistant_tokens INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_context_size_log_created ON context_size_log(created_at);
 """
 
 
@@ -1597,6 +1610,113 @@ class SQLiteStore:
             )
         return {"context_trace_id": context_trace_id,
                 "response_trace_id": response_trace_id, "status": "logged"}
+
+    def log_context_metrics(
+        self,
+        session_id: str | None,
+        turn_number: int,
+        retrieved_atom_count: int,
+        used_atom_count: int,
+        retrieved_atom_tokens: int,
+        user_tokens: int,
+        assistant_tokens: int,
+    ) -> str:
+        log_id = _uid()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO context_size_log
+                    (id, session_id, turn_number, retrieved_atom_count, used_atom_count,
+                     retrieved_atom_tokens, user_tokens, assistant_tokens, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (log_id, session_id, turn_number, retrieved_atom_count, used_atom_count,
+                 retrieved_atom_tokens, user_tokens, assistant_tokens, _now()),
+            )
+        return log_id
+
+    def context_efficiency(self) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT AVG(CAST(used_atom_count AS REAL) / NULLIF(retrieved_atom_count, 0))
+                FROM context_size_log
+                WHERE retrieved_atom_count > 0
+                  AND created_at >= datetime('now', '-30 days')
+                """
+            ).fetchone()
+            avg_efficiency = float(row[0]) if row and row[0] is not None else None
+
+            trend_rows = conn.execute(
+                """
+                SELECT date(created_at) AS day,
+                       AVG(user_tokens) AS avg_user,
+                       AVG(retrieved_atom_tokens) AS avg_retrieved
+                FROM context_size_log
+                WHERE created_at >= datetime('now', '-14 days')
+                GROUP BY day
+                ORDER BY day
+                """
+            ).fetchall()
+
+            traces = conn.execute(
+                """
+                SELECT retrieved_atom_ids, used_atom_ids
+                FROM runtime_context_traces
+                WHERE created_at >= datetime('now', '-30 days')
+                """
+            ).fetchall()
+
+        daily_token_trend = [
+            {
+                "date": r[0],
+                "avg_user_tokens": round(r[1] or 0),
+                "avg_retrieved_tokens": round(r[2] or 0),
+            }
+            for r in trend_rows
+        ]
+
+        retrieved_counts: dict[str, int] = {}
+        used_counts: dict[str, int] = {}
+        for retrieved_json, used_json in traces:
+            try:
+                for aid in json.loads(retrieved_json or "[]"):
+                    retrieved_counts[aid] = retrieved_counts.get(aid, 0) + 1
+                for aid in json.loads(used_json or "[]"):
+                    used_counts[aid] = used_counts.get(aid, 0) + 1
+            except Exception:
+                continue
+
+        fat_atoms = []
+        for atom_id, ret_count in retrieved_counts.items():
+            if ret_count < 5:
+                continue
+            used_count = used_counts.get(atom_id, 0)
+            efficiency_pct = (used_count / ret_count) * 100
+            if efficiency_pct < 20:
+                fat_atoms.append({
+                    "atom_id": atom_id,
+                    "retrieved_count": ret_count,
+                    "used_count": used_count,
+                    "efficiency_pct": round(efficiency_pct, 1),
+                    "content_preview": "",
+                })
+        fat_atoms.sort(key=lambda x: x["efficiency_pct"])
+
+        if fat_atoms:
+            with self._connect() as conn:
+                for fa in fat_atoms[:20]:
+                    row = conn.execute(
+                        "SELECT content FROM memory_atoms WHERE id = ?", (fa["atom_id"],)
+                    ).fetchone()
+                    if row:
+                        fa["content_preview"] = (row[0][:80] + "…") if len(row[0]) > 80 else row[0]
+
+        return {
+            "avg_retrieval_efficiency": avg_efficiency,
+            "fat_atoms": fat_atoms[:20],
+            "daily_token_trend": daily_token_trend,
+        }
 
     def get_and_claim_proposal(
         self, proposal_id: str, approval_token: str

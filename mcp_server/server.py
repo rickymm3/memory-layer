@@ -665,6 +665,8 @@ def memory_log_turn(
     verdict: str = "approved",
     confidence: float = 0.85,
     reasoning: str = "",
+    session_id: str | None = None,
+    turn_number: int = 0,
 ) -> dict:
     """Log one AI conversation turn to the prompt-history audit tables.
 
@@ -689,6 +691,8 @@ def memory_log_turn(
                             'needs_verification' | 'blocked'
         confidence:         Confidence in the response, 0.0–1.0.
         reasoning:          Short note on how memory influenced this response.
+        session_id:         Optional session identifier for context size tracking.
+        turn_number:        Turn index within the session (0 = session start).
 
     Returns:
         {"response_trace_id": str, "context_trace_id": str, "status": "logged"}
@@ -702,6 +706,8 @@ def memory_log_turn(
         verdict=verdict,
         confidence=confidence,
         reasoning=reasoning,
+        session_id=session_id,
+        turn_number=turn_number,
     )
 
 
