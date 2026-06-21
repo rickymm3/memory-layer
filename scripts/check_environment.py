@@ -301,7 +301,10 @@ def main() -> int:
                 )
             )
 
-            embedding_ok = embedding_type == f"vector({EXPECTED_EMBEDDING_DIM})"
+            # Migration 014 changed the column to dimension-flexible 'vector'
+            # (no explicit dim) to support multiple embedding models.
+            # Accept both 'vector' and 'vector(N)' as passing.
+            embedding_ok = embedding_type == f"vector({EXPECTED_EMBEDDING_DIM})" or embedding_type == "vector"
             results.append(
                 CheckResult(
                     "embedding column = vector(4096)",
@@ -310,22 +313,15 @@ def main() -> int:
                 )
             )
 
-            if embedding_type == f"vector({EXPECTED_EMBEDDING_DIM})" and EXPECTED_EMBEDDING_DIM > 2000 and not has_hnsw:
-                results.append(
-                    CheckResult(
-                        "HNSW index exists",
-                        "WARN",
-                        "ANN index not created for vector(4096); exact search is being used for prototype scale.",
-                    )
+            # HNSW is intentionally absent: pgvector HNSW limit is 2000 dims,
+            # and our embeddings are 4096-dim. Exact cosine search is correct here.
+            results.append(
+                CheckResult(
+                    "HNSW index exists",
+                    "WARN",
+                    "Not created by design — pgvector HNSW max is 2000 dims, embeddings are 4096. Exact search used.",
                 )
-            else:
-                results.append(
-                    CheckResult(
-                        "HNSW index exists",
-                        "PASS" if has_hnsw else "FAIL",
-                        f"found={has_hnsw}",
-                    )
-                )
+            )
 
             # --- memory_signals checks ---
             memory_signals_exists = bool(
@@ -451,6 +447,30 @@ def main() -> int:
                     "task_runs exists",
                     "PASS" if task_runs_exists else "FAIL",
                     "found" if task_runs_exists else "missing — run db/migrations/005_add_task_runs.sql",
+                )
+            )
+
+            # --- Sprint 2: atom relations graph ---
+            atom_relations_exists = bool(
+                run_scalar("SELECT to_regclass('public.memory_atom_relations') IS NOT NULL;")
+            )
+            results.append(
+                CheckResult(
+                    "memory_atom_relations exists",
+                    "PASS" if atom_relations_exists else "FAIL",
+                    "found" if atom_relations_exists else "missing — run db/migrations/015_add_atom_relations.sql",
+                )
+            )
+
+            # --- Phase 0: context size tracking ---
+            context_size_log_exists = bool(
+                run_scalar("SELECT to_regclass('public.context_size_log') IS NOT NULL;")
+            )
+            results.append(
+                CheckResult(
+                    "context_size_log exists",
+                    "PASS" if context_size_log_exists else "FAIL",
+                    "found" if context_size_log_exists else "missing — run db/migrations/016_add_context_size_log.sql",
                 )
             )
 

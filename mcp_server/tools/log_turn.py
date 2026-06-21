@@ -68,14 +68,24 @@ def log_turn(
     )
 
     # Log context size metrics for efficiency tracking (fat atom detection).
+    # Look up actual atom content lengths for a realistic token estimate.
     if hasattr(store, "log_context_metrics"):
         try:
+            retrieved_atom_tokens = 0
+            if retrieved and hasattr(store, "get_memory_by_id"):
+                for aid in retrieved:
+                    try:
+                        atom = store.get_memory_by_id(aid)
+                        if atom:
+                            retrieved_atom_tokens += len(atom.get("content", "")) // 4
+                    except Exception:
+                        retrieved_atom_tokens += 9  # fallback: UUID length / 4
             store.log_context_metrics(
                 session_id=session_id,
                 turn_number=turn_number,
                 retrieved_atom_count=len(retrieved),
                 used_atom_count=len(used),
-                retrieved_atom_tokens=sum(len(aid) * 4 for aid in retrieved),
+                retrieved_atom_tokens=retrieved_atom_tokens,
                 user_tokens=len(user_message) // 4,
                 assistant_tokens=len(assistant_response) // 4,
             )
