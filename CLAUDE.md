@@ -102,6 +102,49 @@ Every storage event must be reported with these fields:
 
 ---
 
+## Per-Turn Conversational Memory — Non-Negotiable
+
+Every conversation turn is a memory opportunity. At the end of any turn where
+the user expressed a preference, opinion, decision, instruction, or correction,
+I MUST write it to the memory layer before finishing my response.
+
+**I am the extractor. Not qwen3:8b. Not a background process. Me.**
+
+I see the conversation. I judge what is worth keeping. I write it directly.
+
+Triggers that ALWAYS require a write:
+- User states a preference ("I prefer X", "always use Y", "I like Z")
+- User gives a reason or context for a preference ("because of X", "since we use Y")
+- User corrects me or changes direction
+- User makes a decision about architecture, tools, or process
+- User expresses frustration or satisfaction (signals about what works)
+- A fact was established that I would otherwise forget next session
+
+Write pipeline for conversational turns (faster path than full task pipeline):
+1. Judge: is this worth storing? If not, skip silently.
+2. If yes: call `memory_store_auto` directly with:
+   - content: the full fact, with WHY and CONTEXT included (see below)
+   - memory_type: preference|opinion|decision|instruction|fact|correction
+   - scope: user (cross-project preferences) or project:memory-layer (project-specific)
+   - importance: 0.7–0.9 for explicit preferences/decisions, 0.5–0.7 for observations
+3. Report the write (memory_atom_id + memory_signal_id).
+
+Content quality rule — every stored atom must answer:
+  - WHAT: the preference/decision/fact itself
+  - WHY: the reason, if stated (even briefly)
+  - CONTEXT: what they were working on, what triggered it
+  - REVISABILITY: for preferences in fast-moving domains, note what would change it
+
+Bad: "User prefers concise responses."
+Good: "User prefers concise, direct responses and actively dislikes verbose explanations.
+       Expressed while discussing memory layer architecture in June 2026. This is a strong
+       ongoing preference — any response format change should be validated against it."
+
+Conflicts with existing atoms go to `memory_propose_signal` for review.
+Duplicates or reinforcements: skip the write, but note it internally.
+
+---
+
 ## End-of-Task Reflection
 
 After completing any non-trivial task, run:
