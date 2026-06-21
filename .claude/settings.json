@@ -1,0 +1,59 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "memoryLayer",
+            "tool": "memory_task_context",
+            "input": {
+              "project_scope": "project:memory-layer",
+              "model_scope": "model:claude-sonnet-4-6",
+              "task_hint": "session start — auto-loading project context"
+            }
+          },
+          {
+            "type": "mcp_tool",
+            "server": "memoryLayer",
+            "tool": "memory_recent",
+            "input": {
+              "limit": 5,
+              "scope": "project:memory-layer"
+            }
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/memory-mark-init.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__memoryLayer__memory_task_context",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/memory-mark-init.sh"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/python3 \"$CLAUDE_PROJECT_DIR\"/scripts/log_session_context_metrics.py"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/memory-check.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
