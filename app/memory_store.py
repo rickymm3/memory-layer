@@ -1407,19 +1407,22 @@ class MemoryStore:
                 )
                 recent_signals = cur.fetchall()
 
-                cur.execute(
-                    """
-                    SELECT COUNT(*) AS total_relations,
-                           COUNT(DISTINCT atom_a_id) + COUNT(DISTINCT atom_b_id) AS atoms_in_graph
-                    FROM memory_atom_relations;
-                    """
-                )
-                graph_stats = cur.fetchone()
-
-                cur.execute(
-                    "SELECT relation_type, COUNT(*) FROM memory_atom_relations GROUP BY relation_type;"
-                )
-                relation_type_rows = cur.fetchall()
+                try:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) AS total_relations,
+                               COUNT(DISTINCT atom_a_id) + COUNT(DISTINCT atom_b_id) AS atoms_in_graph
+                        FROM memory_atom_relations;
+                        """
+                    )
+                    graph_stats = cur.fetchone()
+                    cur.execute(
+                        "SELECT relation_type, COUNT(*) FROM memory_atom_relations GROUP BY relation_type;"
+                    )
+                    relation_type_rows = cur.fetchall()
+                except Exception:
+                    graph_stats = None
+                    relation_type_rows = []
 
         lifecycle = {row[0]: int(row[1]) for row in lifecycle_rows}
         active = int(active_stats[0] or 0)
