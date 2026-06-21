@@ -11,7 +11,7 @@
 # harmlessly — the SessionStart hook handles post-compact memory reload.
 
 INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+SESSION_ID=$(echo "$INPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('session_id') or '')" 2>/dev/null)
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 
 # Load .env for DATABASE_URL
