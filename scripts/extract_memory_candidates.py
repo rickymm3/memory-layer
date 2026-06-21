@@ -64,7 +64,6 @@ Rules:
 - Preserve scope qualifiers when needed for standalone meaning (for example: "For this project", "For this user", "In this repo"). Do not drop them from content.
 - Do not rewrite content into lowercase fragments or clause-only snippets.
 - context_summary is optional and should be a concise, grammatical, faithful summary of content.
-- context_summary is optional and should be a concise, grammatical, faithful summary of content.
 - context_summary may be shorter than content and can omit a leading scope qualifier when the underlying meaning remains clear and faithful.
 - context_summary must preserve uncertainty words like "for now", "maybe", "can", "might", and "later".
 - context_summary must not invent reasons and must not make uncertain statements firmer.
@@ -84,6 +83,14 @@ Rules:
 - High confidence means the statement was clearly said; it does not mean the memory is important.
 - Importance measures future usefulness, not certainty.
 - If the text looks like a toy/example sentence, be especially conservative.
+
+CONTEXT CAPTURE RULES (critical — atoms without context are nearly useless over time):
+- For preferences and opinions: always include WHY if the user stated a reason, even briefly. "User prefers X" is weak. "User prefers X because Y" is durable.
+- For preferences and opinions: always note WHAT CONTEXT triggered this — what project type, what problem they were solving, what alternative they were rejecting. This is what allows the system to surface "you said this while building Z — does it still apply?"
+- For preferences that may change: include a note like "this preference may be revised if [competing technology / use case change]" only when the user signals openness to change or the domain is fast-moving.
+- For decisions and instructions: capture what was decided, what was rejected, and why — not just the outcome.
+- Self-contained means: a reader with zero knowledge of this conversation, reading this atom 6 months later, understands the full claim without needing to ask "what context?" or "phase of what?"
+- Never use session-internal names in atoms: "Phase 0", "Sprint 2", "today's task", "the fix from earlier", "the approach above" are all forbidden. Use the actual feature or concept name.
 
 Return ONLY strict JSON in this format:
 {{
@@ -314,6 +321,13 @@ Rules:
 - Do not store verbatim quotes — rewrite as durable standalone statements.
 - context_summary must be faithful and preserve proper nouns and uncertainty words.
 - Preserve scope qualifiers in content when needed for standalone meaning.
+
+CONTEXT CAPTURE RULES (critical — atoms without context are nearly useless over time):
+- For preferences and opinions: always include WHY if the user stated a reason. "User prefers X" is weak. "User prefers X because Y" is durable.
+- For preferences and opinions: note WHAT CONTEXT triggered this — what project, what problem, what alternative was rejected. This enables surfacing "you said this while building Z — does it still apply?"
+- For preferences that may change: add a note about what would constitute a revision only when the user signals openness to change or the domain is fast-moving.
+- For decisions: capture what was decided, what was rejected, and why — not just the outcome.
+- Self-contained means: a reader 6 months later with no conversation context understands the full claim. No "Phase N", "Sprint N", "today's task", "the fix from earlier", "the approach above" — use actual feature/concept names.
 
 Return ONLY strict JSON:
 {{

@@ -43,16 +43,6 @@ _VAGUE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Session-internal jargon: names that only exist within a single conversation
-# and lose all meaning without it. "Phase 3", "Sprint 2", "today's task", etc.
-_SESSION_JARGON_RE = re.compile(
-    r"\b(phase\s+\d+|phase\s+[a-z]\b|sprint\s+\d+|sprint\s+[a-z]\b|"
-    r"step\s+\d+|iteration\s+\d+|"
-    r"today'?s?\s+task|this\s+session|the\s+fix\s+from|the\s+change\s+above|"
-    r"as\s+mentioned|as\s+discussed|from\s+earlier|the\s+above|per\s+above)\b",
-    re.IGNORECASE,
-)
-
 # ── Durable patterns: content with long-term value ───────────────────────────
 
 _ARCHITECTURAL_RE = re.compile(
@@ -154,19 +144,6 @@ def score_write_quality(
         penalty = min(0.15, 0.05 * len(vague_matches))
         score -= penalty
         signals.append(f"-{penalty:.2f} vague qualifiers: {vague_matches[:2]}")
-
-    # Session-internal jargon makes atoms meaningless without conversation context.
-    # "Phase 0/A/B", "Sprint 2", etc. — hard reject if present.
-    jargon_matches = _SESSION_JARGON_RE.findall(text)
-    if jargon_matches:
-        return QualityResult(
-            quality_score=0.1,
-            decision="reject",
-            signals=[
-                f"session-internal jargon detected: {jargon_matches[:3]} — "
-                "rewrite with concrete feature names readable without prior context"
-            ],
-        )
 
     # ── Specificity bonuses ────────────────────────────────────────────────
     arch_matches = _ARCHITECTURAL_RE.findall(text)
