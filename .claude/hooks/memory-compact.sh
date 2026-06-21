@@ -1,29 +1,23 @@
 #!/bin/bash
 # PreCompact hook — fires before Claude Code compacts the conversation.
-#
-# Injects a structured MEMORY LAYER CONTEXT block into the pre-compaction
-# context so the compactor's summary preserves memory-relevant facts.
-#
-# Also handles PostCompact (fired via SessionStart matcher="compact"):
-# that re-runs memory_task_context automatically via the existing SessionStart hook.
-#
-# If PreCompact doesn't support additionalContext injection, this exits 0
-# harmlessly — the SessionStart hook handles post-compact memory reload.
+# Injects top atoms (by composite score, token-budgeted) so the compactor
+# summary preserves durable memory-layer facts.
+# PostCompact is handled by the SessionStart hook (matcher="compact").
 
 INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('session_id') or '')" 2>/dev/null)
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 
-# Load .env for DATABASE_URL
 if [ -f "$PROJECT_DIR/.env" ]; then
     set -a
     source "$PROJECT_DIR/.env"
     set +a
 fi
 
-# Fetch top 10 high-confidence atoms for this project as a compact block
 ATOMS=$("$PROJECT_DIR/.venv/bin/python3" - <<'PYEOF' 2>/dev/null
 import os, sys
+
+TOKEN_BUDGET = 600  # max tokens for pre-compaction injection
+
 try:
     import psycopg
     db = os.environ.get("DATABASE_URL", "")
@@ -32,17 +26,23 @@ try:
     with psycopg.connect(db) as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT memory_type, confidence, content
+                SELECT memory_type, confidence, importance, support_weight, content
                 FROM memory_atoms
-                WHERE lifecycle_status = 'active'
+                WHERE lifecycle_status IN ('active', 'belief')
                   AND scope = 'project:memory-layer'
-                ORDER BY (confidence * importance) DESC
-                LIMIT 10
+                ORDER BY (confidence * importance * (1.0 + COALESCE(support_weight, 0) * 0.5)) DESC
+                LIMIT 20
             """)
             rows = cur.fetchall()
+
     lines = []
-    for mtype, conf, content in rows:
-        lines.append(f"[{mtype}] ({conf:.2f}) {content}")
+    budget = 0
+    for mtype, conf, importance, support_weight, content in rows:
+        cost = max(1, len(content) // 4)
+        if budget + cost > TOKEN_BUDGET:
+            break
+        budget += cost
+        lines.append(f"[{mtype}] ({float(conf):.2f}) {content}")
     print("\n".join(lines))
 except Exception:
     pass
@@ -53,13 +53,15 @@ if [ -z "$ATOMS" ]; then
     exit 0
 fi
 
-# Output additionalContext for the compactor to include in its summary.
-# Escape the atoms block as a JSON string value.
 ESCAPED_ATOMS=$(echo "$ATOMS" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo '""')
 
 python3 - <<PYEOF
 import json
-context = "## MEMORY LAYER — PRE-COMPACTION CONTEXT\\nThe following project memory atoms should be preserved in the compaction summary:\\n\\n" + ${ESCAPED_ATOMS} + "\\n\\nThese represent durable decisions and constraints that outlive any single session."
+context = (
+    "## MEMORY — PRE-COMPACTION CONTEXT\n"
+    "Preserve these project atoms in the compaction summary:\n\n"
+    + ${ESCAPED_ATOMS}
+)
 print(json.dumps({
     "hookSpecificOutput": {
         "hookEventName": "PreCompact",
