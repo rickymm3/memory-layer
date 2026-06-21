@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}Health{% endblock %}
+
+{% block content %}
+<style>
+  .health-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.75rem;
+  }
+  .stat-card {
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: .5rem;
+    padding: 1rem 1.25rem;
+    text-align: center;
+  }
+  .stat-card .value {
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1.1;
+    display: block;
+  }
+  .stat-card .label {
+    font-size: .75rem;
+    color: var(--pico-muted-color);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    margin-top: .3rem;
+    display: block;
+  }
+  .ok    { color: #166534; }
+  .warn  { color: #854d0e; }
+  .bad   { color: #991b1b; }
+  .bar-row { display: flex; align-items: center; gap: .6rem; margin: .35rem 0; }
+  .bar-label { min-width: 120px; font-size: .82rem; text-align: right; color: var(--pico-muted-color); }
+  .bar-track { flex: 1; height: 10px; background: var(--pico-muted-background); border-radius: 5px; overflow: hidden; }
+  .bar-fill  { height: 100%; background: var(--pico-primary); border-radius: 5px; }
+  .bar-count { font-size: .78rem; color: var(--pico-muted-color); min-width: 36px; }
+  .section-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem; }
+  @media (max-width: 700px) { .section-grid { grid-template-columns: 1fr; } }
+  .activity-row { display: flex; align-items: flex-end; gap: 2px; height: 48px; }
+  .activity-bar { background: var(--pico-primary); border-radius: 2px 2px 0 0; min-width: 14px; opacity: .7; }
+</style>
+
+<hgroup>
+  <h2>Memory Health</h2>
+  <p>Backend: <strong>{{ r.backend }}</strong> &mdash;
+     {{ r.total_atoms }} total atoms,
+     {{ r.active_atoms }} active</p>
+</hgroup>
+
+{# ── Summary cards ── #}
+<div class="health-grid">
+  <div class="stat-card">
+    <span class="value">{{ r.active_atoms }}</span>
+    <span class="label">Active atoms</span>
+  </div>
+
+  <div class="stat-card">
+    <span class="value {% if r.conflict_rate > 15 %}bad{% elif r.conflict_rate > 5 %}warn{% else %}ok{% endif %}">
+      {{ r.conflict_rate }}%
+    </span>
+    <span class="label">Conflict rate</span>
+  </div>
+
+  <div class="stat-card">
+    <span class="value {% if r.orphan_rate > 40 %}warn{% else %}ok{% endif %}">
+      {{ r.orphan_rate }}%
+    </span>
+    <span class="label">Orphan rate<br><small>(no signal reinforcement)</small></span>
+  </div>
+
+  <div class="stat-card">
+    <span class="value {% if r.avg_confidence < 0.5 %}bad{% elif r.avg_confidence < 0.7 %}warn{% else %}ok{% endif %}">
+      {{ "%.2f"|format(r.avg_confidence) }}
+    </span>
+    <span class="label">Avg confidence</span>
+  </div>
+
+  <div class="stat-card">
+    <span class="value">{{ r.signal_coverage.total_signals }}</span>
+    <span class="label">Total signals</span>
+  </div>
+
+  <div class="stat-card">
+    <span class="value {% if r.signal_coverage.coverage_pct < 50 %}warn{% else %}ok{% endif %}">
+      {{ r.signal_coverage.coverage_pct }}%
+    </span>
+    <span class="label">Signal coverage</span>
+  </div>
+</div>
+
+<div class="section-grid">
+
+  {# ── Lifecycle breakdown ── #}
+  <section>
+    <h4>Lifecycle</h4>
+    {% set total = r.total_atoms or 1 %}
+    {% for status, count in r.lifecycle.items() %}
+      <div class="bar-row">
+        <span class="bar-label lifecycle-{{ status }}">{{ status }}</span>
+        <div class="bar-track">
+          <div class="bar-fill" style="width: {{ [count / total * 100, 100]|min }}%"></div>
+        </div>
+        <span class="bar-count">{{ count }}</span>
+      </div>
+    {% endfor %}
+  </section>
+
+  {# ── Memory type breakdown ── #}
+  <section>
+    <h4>Memory types</h4>
+    {% set max_type = r.type_distribution.values()|max if r.type_distribution else 1 %}
+    {% for mtype, count in r.type_distribution.items() %}
+      <div class="bar-row">
+        <span class="bar-label">{{ mtype }}</span>
+        <div class="bar-track">
+          <div class="bar-fill" style="width: {{ [count / max_type * 100, 100]|min }}%"></div>
+        </div>
+        <span class="bar-count">{{ count }}</span>
+      </div>
+    {% endfor %}
+  </section>
+
+</div>
+
+{# ── Scope distribution ── #}
+<section style="margin-bottom: 1.5rem;">
+  <h4>Scope distribution</h4>
+  {% set max_scope = r.scope_distribution.values()|max if r.scope_distribution else 1 %}
+  {% for scope, count in r.scope_distribution.items() %}
+    <div class="bar-row">
+      <span class="bar-label" title="{{ scope }}">{{ scope[:24] }}{% if scope|length > 24 %}…{% endif %}</span>
+      <div class="bar-track">
+        <div class="bar-fill" style="width: {{ [count / max_scope * 100, 100]|min }}%"></div>
+      </div>
+      <span class="bar-count">{{ count }}</span>
+    </div>
+  {% endfor %}
+</section>
+
+{# ── Signal activity (14d) ── #}
+{% if r.signal_activity_14d %}
+<section style="margin-bottom: 1.5rem;">
+  <h4>Signal activity — last 14 days</h4>
+  {% set max_act = r.signal_activity_14d.values()|max if r.signal_activity_14d else 1 %}
+  <div class="activity-row">
+    {% for day, cnt in r.signal_activity_14d.items()|sort %}
+      <div class="activity-bar"
+           style="height: {{ [cnt / max_act * 48, 4]|max }}px"
+           title="{{ day }}: {{ cnt }} signal(s)"></div>
+    {% endfor %}
+  </div>
+  <small style="color:var(--pico-muted-color)">
+    {% for day, cnt in r.signal_activity_14d.items()|sort %}
+      <span title="{{ day }}">{{ cnt }}</span>
+    {% endfor %}
+    &nbsp;(oldest → newest)
+  </small>
+</section>
+{% endif %}
+
+{# ── Top contested atoms ── #}
+{% if r.top_contested %}
+<section>
+  <h4>Top contested atoms
+    <small style="font-weight:400;color:var(--pico-muted-color)">
+      — {{ r.contested_count }} atom(s) with disagreement ≥ 0.4 &mdash;
+      review via <code>make review-proposals</code>
+    </small>
+  </h4>
+  <table>
+    <thead>
+      <tr>
+        <th>Content</th>
+        <th>Scope</th>
+        <th>Disagree</th>
+        <th>Confidence</th>
+        <th>View</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for atom in r.top_contested %}
+      <tr class="contested-row">
+        <td class="truncate">{{ atom.content }}</td>
+        <td><span class="monospace">{{ atom.scope }}</span></td>
+        <td class="bad" style="font-weight:600">{{ atom.disagreement_score }}</td>
+        <td class="conf-{{ 'high' if atom.confidence >= 0.7 else ('mid' if atom.confidence >= 0.5 else 'low') }}">
+          {{ atom.confidence }}
+        </td>
+        <td><a href="/atom/{{ atom.id }}">→</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<p class="ok">✓ No contested atoms (disagreement score &lt; 0.4 across all active atoms)</p>
+{% endif %}
+
+{% if r.orphan_count > 0 %}
+<p style="margin-top:1rem;color:var(--pico-muted-color);font-size:.85rem;">
+  ⚠ {{ r.orphan_count }} active atom(s) have no support signals (orphans) — consider reinforcing or archiving via
+  <code>make list</code> + <code>make delete</code>.
+</p>
+{% endif %}
+{% endblock %}

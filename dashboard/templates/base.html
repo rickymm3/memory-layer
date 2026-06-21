@@ -6,8 +6,96 @@
   <title>{% block title %}memoryLayer{% endblock %} — dashboard</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
   <style>
-    body { max-width: 1200px; margin: 0 auto; padding: 0 1rem; }
-    nav ul { gap: 1.5rem; }
+    /* ── Global reset for layout ── */
+    html, body { height: 100%; margin: 0; padding: 0; }
+    body {
+      max-width: none;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      grid-template-columns: 200px 1fr;
+      grid-template-areas:
+        "topbar  topbar"
+        "sidebar content"
+        "footer  footer";
+      min-height: 100dvh;
+    }
+
+    /* ── Top bar ── */
+    .topbar {
+      grid-area: topbar;
+      display: flex;
+      align-items: center;
+      padding: .55rem 1.25rem;
+      border-bottom: 1px solid var(--pico-muted-border-color, #e0e0e0);
+      background: var(--pico-background-color, #fff);
+    }
+    .topbar-brand {
+      font-weight: 700;
+      font-size: 1rem;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      grid-area: sidebar;
+      border-right: 1px solid var(--pico-muted-border-color, #e0e0e0);
+      padding: 1.1rem .65rem 1.5rem;
+      overflow-y: auto;
+      font-size: .85rem;
+    }
+    .nav-group { margin-bottom: 1rem; }
+    .nav-label {
+      display: block;
+      font-size: .68rem;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--pico-muted-color);
+      padding: 0 .5rem;
+      margin-bottom: .3rem;
+    }
+    .sidebar a {
+      display: block;
+      padding: .32rem .5rem;
+      border-radius: .35rem;
+      color: inherit;
+      text-decoration: none;
+      line-height: 1.35;
+      transition: background .1s;
+    }
+    .sidebar a:hover { background: var(--pico-muted-background); }
+    .sidebar a[aria-current="page"] {
+      background: var(--pico-primary);
+      color: #fff;
+      font-weight: 500;
+    }
+    .sidebar hr { margin: .75rem .25rem; }
+
+    /* ── Main content ── */
+    main {
+      grid-area: content;
+      padding: 1.5rem 2rem;
+      overflow-y: auto;
+      max-width: 1100px;
+      box-sizing: border-box;
+    }
+
+    /* ── Footer ── */
+    footer {
+      grid-area: footer;
+      border-top: 1px solid var(--pico-muted-border-color, #e0e0e0);
+      padding: .45rem 1.25rem;
+      font-size: .78rem;
+      color: var(--pico-muted-color);
+    }
+
+    /* ── Chat page: full height, no scroll ── */
+    body.chat-page { overflow: hidden; height: 100dvh; }
+    body.chat-page main { overflow: hidden; padding: 0; max-width: none; display: flex; flex-direction: column; }
+    body.chat-page footer { display: none; }
+
+    /* ── Badges ── */
     .badge {
       display: inline-block;
       padding: .1em .5em;
@@ -17,31 +105,34 @@
       background: var(--pico-muted-background);
       color: var(--pico-muted-color);
     }
-    .badge-decision  { background: #dbeafe; color: #1e40af; }
+    .badge-decision    { background: #dbeafe; color: #1e40af; }
     .badge-instruction { background: #fef9c3; color: #854d0e; }
-    .badge-fact      { background: #dcfce7; color: #166534; }
-    .badge-opinion   { background: #fce7f3; color: #9d174d; }
-    .badge-preference { background: #ede9fe; color: #5b21b6; }
-    .badge-new       { background: #dcfce7; color: #166534; }
-    .badge-conflict  { background: #fee2e2; color: #991b1b; }
-    .badge-refinement { background: #dbeafe; color: #1e40af; }
-    .badge-opinion_change { background: #fce7f3; color: #9d174d; }
-    .badge-reinforcement { background: #dcfce7; color: #166534; }
-    .conf-low-row td { background: #fefce8 !important; }
-    .contested-row td { background: #fff1f2 !important; }
+    .badge-fact        { background: #dcfce7; color: #166534; }
+    .badge-opinion     { background: #fce7f3; color: #9d174d; }
+    .badge-preference  { background: #ede9fe; color: #5b21b6; }
+    .badge-new         { background: #dcfce7; color: #166534; }
+    .badge-conflict    { background: #fee2e2; color: #991b1b; }
+    .badge-refinement  { background: #dbeafe; color: #1e40af; }
+    .badge-opinion_change  { background: #fce7f3; color: #9d174d; }
+    .badge-reinforcement   { background: #dcfce7; color: #166534; }
+
+    /* ── Table helpers ── */
+    .conf-low-row td       { background: #fefce8 !important; }
+    .contested-row td      { background: #fff1f2 !important; }
     .lifecycle-inactive-row td { background: #f3f4f6 !important; opacity: .75; }
     .conf-high  { color: #166534; font-weight: 600; }
     .conf-mid   { color: #854d0e; }
     .conf-low   { color: #991b1b; }
-    .lifecycle-active    { color: #166534; font-size: .78em; font-weight: 600; }
+    .lifecycle-active     { color: #166534; font-size: .78em; font-weight: 600; }
     .lifecycle-superseded { color: #7c3aed; font-size: .78em; font-weight: 600; }
-    .lifecycle-archived  { color: #6b7280; font-size: .78em; font-weight: 600; }
-    .lifecycle-contested { color: #b45309; font-size: .78em; font-weight: 600; }
-    table { font-size: .88rem; }
-    td, th { vertical-align: top; }
-    .truncate { max-width: 420px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lifecycle-archived   { color: #6b7280; font-size: .78em; font-weight: 600; }
+    .lifecycle-contested  { color: #b45309; font-size: .78em; font-weight: 600; }
+    table    { font-size: .88rem; }
+    td, th   { vertical-align: top; }
+    .truncate  { max-width: 420px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .monospace { font-family: monospace; font-size: .8em; color: var(--pico-muted-color); }
-    /* Source provenance badge */
+
+    /* ── Source provenance badge ── */
     .source-badge {
       font-size: .68rem; font-weight: 700; letter-spacing: .02em;
       padding: .08rem .35rem; border-radius: .25rem;
@@ -51,32 +142,103 @@
   </style>
 </head>
 <body class="{% block body_class %}{% endblock %}">
-  <header>
-    <nav>
-      <ul>
-        <li><strong><a href="/" style="text-decoration:none">🧠 memoryLayer</a></strong></li>
-      </ul>
-      <ul>
-        <li><a href="/">Atoms</a></li>
-        <li><a href="/scopes">Scopes</a></li>
-        <li><a href="/contested">Contested</a></li>
-        <li><a href="/proposals">Proposals</a></li>
-        <li><a href="/task_runs">Task Runs</a></li>
-        <li><a href="/model_lessons">Model Lessons</a></li>
-        <li><a href="/commits">Commits</a></li>
-        <li><a href="/context_traces">Context</a></li>
-        <li><a href="/response_traces">Responses</a></li>
-        <li><a href="/beliefs">Beliefs</a></li>
-        <li><a href="/prompt_history">Prompt History</a></li>
-        <li><a href="/chat">Chat</a></li>
-      </ul>
-    </nav>
+
+  <header class="topbar">
+    <a href="/" class="topbar-brand">🧠 memoryLayer</a>
   </header>
+
+  <aside class="sidebar">
+    <nav>
+      <div class="nav-group">
+        <span class="nav-label">Memory</span>
+        <a href="/"
+          {% if request.endpoint in ('atoms', 'atom_detail') %}aria-current="page"{% endif %}>
+          Atoms
+        </a>
+        <a href="/scopes"
+          {% if request.endpoint == 'scopes' %}aria-current="page"{% endif %}>
+          Scopes
+        </a>
+        <a href="/contested"
+          {% if request.endpoint == 'contested' %}aria-current="page"{% endif %}>
+          Contested
+        </a>
+        <a href="/beliefs"
+          {% if request.endpoint == 'beliefs' %}aria-current="page"{% endif %}>
+          Beliefs
+        </a>
+      </div>
+
+      <div class="nav-group">
+        <span class="nav-label">Workflow</span>
+        <a href="/proposals"
+          {% if request.endpoint == 'proposals' %}aria-current="page"{% endif %}>
+          Proposals
+        </a>
+        <a href="/task_runs"
+          {% if request.endpoint in ('task_runs', 'task_run_detail') %}aria-current="page"{% endif %}>
+          Task Runs
+        </a>
+        <a href="/commits"
+          {% if request.endpoint == 'commits' %}aria-current="page"{% endif %}>
+          Commits
+        </a>
+      </div>
+
+      <div class="nav-group">
+        <span class="nav-label">Traces</span>
+        <a href="/context_traces"
+          {% if request.endpoint == 'context_traces' %}aria-current="page"{% endif %}>
+          Context
+        </a>
+        <a href="/response_traces"
+          {% if request.endpoint == 'response_traces' %}aria-current="page"{% endif %}>
+          Responses
+        </a>
+        <a href="/prompt_history"
+          {% if request.endpoint in ('prompt_history', 'prompt_history_detail') %}aria-current="page"{% endif %}>
+          Prompt History
+        </a>
+      </div>
+
+      <div class="nav-group">
+        <span class="nav-label">Model</span>
+        <a href="/model_lessons"
+          {% if request.endpoint == 'model_lessons' %}aria-current="page"{% endif %}>
+          Model Lessons
+        </a>
+      </div>
+
+      <div class="nav-group">
+        <span class="nav-label">System</span>
+        <a href="/health"
+          {% if request.endpoint == 'health' %}aria-current="page"{% endif %}>
+          🩺 Health
+        </a>
+      </div>
+
+      <hr>
+
+      <div class="nav-group">
+        <a href="/chat"
+          {% if request.endpoint in ('chat', 'chat_clear') %}aria-current="page"{% endif %}>
+          💬 Chat
+        </a>
+        <a href="/generate"
+          {% if request.endpoint in ('generate', 'generate_image', 'generate_video') %}aria-current="page"{% endif %}>
+          🎨 Generate
+        </a>
+      </div>
+    </nav>
+  </aside>
+
   <main>
     {% block content %}{% endblock %}
   </main>
+
   <footer>
-    <small style="color:var(--pico-muted-color)">Read-only dashboard — approve proposals via <code>make review-proposals</code></small>
+    Read-only dashboard &mdash; approve proposals via <code>make review-proposals</code>
   </footer>
+
 </body>
 </html>

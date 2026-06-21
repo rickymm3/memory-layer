@@ -35,9 +35,12 @@ class MemoryStore:
         return re.sub(r"\s+", " ", value.strip().lower())
 
     def init_db(self) -> None:
-        root_dir = Path(__file__).resolve().parent.parent
-        init_sql_path = root_dir / "db" / "init.sql"
-        sql = init_sql_path.read_text(encoding="utf-8")
+        try:
+            from importlib.resources import files
+            sql = files("app.sql").joinpath("init.sql").read_text(encoding="utf-8")
+        except Exception:
+            root_dir = Path(__file__).resolve().parent.parent
+            sql = (root_dir / "db" / "init.sql").read_text(encoding="utf-8")
 
         with psycopg.connect(self.config.database_url) as conn:
             with conn.cursor() as cur:
@@ -107,7 +110,7 @@ class MemoryStore:
         task_run_id: str | None = None,
         source_url: str | None = None,
         atom_source_type: str | None = None,
-    ) -> str:
+    ) -> tuple[str, str]:
         """Store a memory_atom and a linked memory_signal in a single transaction.
 
         The atom is inserted first; its id is set on the signal at creation time
@@ -264,6 +267,7 @@ class MemoryStore:
                         opposition_weight  = %s,
                         disagreement_score = %s,
                         confidence         = %s,
+                        retrieval_priority = %s,
                         last_recomputed_at = now()
                     WHERE id = %s
                     RETURNING
@@ -276,6 +280,7 @@ class MemoryStore:
                         weights["opposition_weight"],
                         weights["disagreement_score"],
                         weights["confidence"],
+                        weights.get("retrieval_priority", 1.0),
                         atom_id,
                     ),
                 )
@@ -881,36 +886,54 @@ class MemoryStore:
 
         with psycopg.connect(self.config.database_url) as conn:
             with conn.cursor() as cur:
+                # CTE computes similarity once; outer query applies composite
+                # trust-ranked scoring and recency decay for volatile types.
                 cur.execute(
                     f"""
-                    SELECT
-                        id,
-                        content,
-                        context_summary,
-                        memory_type,
-                        scope,
-                        confidence,
-                        importance,
-                        1 - (embedding <=> %s::vector) AS similarity,
-                        created_at,
-                        lifecycle_status,
-                        support_weight,
-                        opposition_weight,
-                        disagreement_score
-                    FROM memory_atoms
-                    WHERE 1 - (embedding <=> %s::vector) >= %s
-                      AND (lifecycle_status IS NULL
-                           OR lifecycle_status NOT IN ('superseded', 'deprecated', 'archived'))
-                      {scope_clause}
-                    ORDER BY embedding <=> %s::vector
+                    WITH scored AS (
+                        SELECT
+                            id,
+                            content,
+                            context_summary,
+                            memory_type,
+                            scope,
+                            confidence,
+                            importance,
+                            1 - (embedding <=> %s::vector) AS similarity,
+                            created_at,
+                            lifecycle_status,
+                            support_weight,
+                            opposition_weight,
+                            disagreement_score
+                        FROM memory_atoms
+                        WHERE (lifecycle_status IS NULL
+                               OR lifecycle_status NOT IN ('superseded', 'deprecated', 'archived'))
+                          {scope_clause}
+                    )
+                    SELECT *,
+                        (
+                            similarity * 0.60
+                            + confidence * 0.25
+                            - COALESCE(disagreement_score, 0.0) * 0.15
+                        ) * CASE
+                            WHEN memory_type IN ('opinion','preference','lesson','belief')
+                            THEN GREATEST(0.3, EXP(
+                                -LN(2) * EXTRACT(EPOCH FROM (NOW() - created_at)) / (90.0 * 86400)
+                            ))
+                            ELSE 1.0
+                        END AS composite_score
+                    FROM scored
+                    WHERE similarity >= %s
+                    ORDER BY composite_score DESC
                     LIMIT %s;
                     """,
-                    (embedding_literal, embedding_literal, threshold, *scope_params, embedding_literal, limit),
+                    (embedding_literal, *scope_params, threshold, limit),
                 )
                 rows = cur.fetchall()
 
         results: list[dict[str, Any]] = []
         for row in rows:
+            ds = float(row[12]) if row[12] is not None else 0.0
             results.append(
                 {
                     "id": str(row[0]),
@@ -921,11 +944,13 @@ class MemoryStore:
                     "confidence": float(row[5]),
                     "importance": float(row[6]),
                     "similarity": float(row[7]),
+                    "composite_score": round(float(row[13]), 4),
                     "created_at": row[8].isoformat() if row[8] is not None else None,
                     "lifecycle_status": row[9] or "active",
                     "support_weight": float(row[10]) if row[10] is not None else 0.0,
                     "opposition_weight": float(row[11]) if row[11] is not None else 0.0,
-                    "disagreement_score": float(row[12]) if row[12] is not None else 0.0,
+                    "disagreement_score": ds,
+                    "disagreement_flag": ds >= 0.5,
                 }
             )
 
@@ -1301,3 +1326,740 @@ class MemoryStore:
             },
             "revision_history": revision_history,
         }
+
+    # ── Shared interface methods (also implemented by SQLiteStore) ────────────
+
+    def health_stats(self) -> dict[str, Any]:
+        """Return atom count and available scopes."""
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM memory_atoms;")
+                count = int(cur.fetchone()[0])
+                cur.execute("SELECT DISTINCT scope FROM memory_atoms ORDER BY scope;")
+                scopes = [r[0] for r in cur.fetchall()]
+        return {"atom_count": count, "available_scopes": scopes, "backend": "postgres"}
+
+    def health_report(self) -> dict[str, Any]:
+        """Return a detailed health report for the dashboard /health page."""
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COALESCE(lifecycle_status,'active'), COUNT(*) FROM memory_atoms GROUP BY lifecycle_status;"
+                )
+                lifecycle_rows = cur.fetchall()
+
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS total_active,
+                           SUM(CASE WHEN disagreement_score >= 0.4 THEN 1 ELSE 0 END) AS contested,
+                           SUM(CASE WHEN support_weight = 0 THEN 1 ELSE 0 END) AS orphans,
+                           AVG(confidence) AS avg_confidence,
+                           AVG(disagreement_score) AS avg_disagreement
+                    FROM memory_atoms
+                    WHERE lifecycle_status = 'active' OR lifecycle_status IS NULL;
+                    """
+                )
+                active_stats = cur.fetchone()
+
+                cur.execute(
+                    """
+                    SELECT COALESCE(scope,'(none)'), COUNT(*)
+                    FROM memory_atoms
+                    WHERE lifecycle_status = 'active' OR lifecycle_status IS NULL
+                    GROUP BY scope ORDER BY COUNT(*) DESC LIMIT 12;
+                    """
+                )
+                scope_rows = cur.fetchall()
+
+                cur.execute(
+                    """
+                    SELECT memory_type, COUNT(*)
+                    FROM memory_atoms
+                    WHERE lifecycle_status = 'active' OR lifecycle_status IS NULL
+                    GROUP BY memory_type ORDER BY COUNT(*) DESC;
+                    """
+                )
+                type_rows = cur.fetchall()
+
+                cur.execute(
+                    """
+                    SELECT id::text, content, disagreement_score, confidence, COALESCE(scope,'(none)')
+                    FROM memory_atoms
+                    WHERE (lifecycle_status = 'active' OR lifecycle_status IS NULL)
+                      AND disagreement_score >= 0.4
+                    ORDER BY disagreement_score DESC LIMIT 5;
+                    """
+                )
+                contested_rows = cur.fetchall()
+
+                cur.execute(
+                    "SELECT COUNT(DISTINCT memory_atom_id), COUNT(*) FROM memory_signals;"
+                )
+                signal_stats = cur.fetchone()
+
+                cur.execute(
+                    """
+                    SELECT date_trunc('day', created_at)::date::text AS day, COUNT(*)
+                    FROM memory_signals
+                    WHERE created_at >= NOW() - INTERVAL '14 days'
+                    GROUP BY day ORDER BY day DESC;
+                    """
+                )
+                recent_signals = cur.fetchall()
+
+        lifecycle = {row[0]: int(row[1]) for row in lifecycle_rows}
+        active = int(active_stats[0] or 0)
+
+        def pct(n: int) -> float:
+            return round(n / active * 100, 1) if active else 0.0
+
+        return {
+            "backend": "postgres",
+            "total_atoms": sum(lifecycle.values()),
+            "active_atoms": active,
+            "lifecycle": lifecycle,
+            "conflict_rate": pct(int(active_stats[1] or 0)),
+            "orphan_rate": pct(int(active_stats[2] or 0)),
+            "contested_count": int(active_stats[1] or 0),
+            "orphan_count": int(active_stats[2] or 0),
+            "avg_confidence": round(float(active_stats[3] or 0), 3),
+            "avg_disagreement": round(float(active_stats[4] or 0), 3),
+            "scope_distribution": {row[0]: int(row[1]) for row in scope_rows},
+            "type_distribution": {row[0]: int(row[1]) for row in type_rows},
+            "top_contested": [
+                {
+                    "id": r[0],
+                    "content": r[1][:90] + "…" if len(r[1]) > 90 else r[1],
+                    "disagreement_score": round(float(r[2]), 3),
+                    "confidence": round(float(r[3]), 3),
+                    "scope": r[4],
+                }
+                for r in contested_rows
+            ],
+            "signal_coverage": {
+                "atoms_with_signals": int(signal_stats[0] or 0),
+                "total_signals": int(signal_stats[1] or 0),
+                "coverage_pct": pct(int(signal_stats[0] or 0)),
+            },
+            "signal_activity_14d": {row[0]: int(row[1]) for row in recent_signals},
+        }
+
+    def list_recent(
+        self, limit: int = 10, scope: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return most recent non-archived atoms."""
+        params: list[Any] = []
+        scope_clause = ""
+        if scope is not None:
+            scope_clause = "AND scope = %s"
+            params.append(scope)
+        params.append(limit)
+
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT id, content, context_summary, memory_type, scope,
+                           confidence, importance, created_at,
+                           support_weight, opposition_weight, disagreement_score,
+                           last_recomputed_at, lifecycle_status,
+                           superseded_by_atom_id, lifecycle_reason,
+                           retrieval_priority, lifecycle_updated_at
+                    FROM memory_atoms
+                    WHERE lifecycle_status != 'archived' {scope_clause}
+                    ORDER BY created_at DESC LIMIT %s;
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+
+        return [_pg_atom_row_to_dict(r) for r in rows]
+
+    def project_context_atoms(
+        self,
+        scope: str,
+        limit: int = 10,
+        min_importance: float = 0.6,
+        min_confidence: float = 0.7,
+    ) -> list[dict[str, Any]]:
+        """Return high-importance, high-confidence active atoms for a scope."""
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, content, context_summary, memory_type, scope,
+                           confidence, importance, created_at,
+                           support_weight, opposition_weight, disagreement_score,
+                           last_recomputed_at, lifecycle_status,
+                           superseded_by_atom_id, lifecycle_reason,
+                           retrieval_priority, lifecycle_updated_at
+                    FROM memory_atoms
+                    WHERE scope = %s AND importance >= %s AND confidence >= %s
+                      AND lifecycle_status = 'active'
+                    ORDER BY importance DESC, confidence DESC, created_at DESC
+                    LIMIT %s;
+                    """,
+                    (scope, min_importance, min_confidence, limit),
+                )
+                rows = cur.fetchall()
+        return [_pg_atom_row_to_dict(r) for r in rows]
+
+    def get_active_atoms_by_scope(
+        self, scope: str, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """Return all active atoms for a scope (used for model_lessons)."""
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, content, context_summary, memory_type, scope,
+                           confidence, importance, created_at,
+                           support_weight, opposition_weight, disagreement_score,
+                           last_recomputed_at, lifecycle_status,
+                           superseded_by_atom_id, lifecycle_reason,
+                           retrieval_priority, lifecycle_updated_at
+                    FROM memory_atoms
+                    WHERE scope = %s AND lifecycle_status = 'active'
+                    ORDER BY importance DESC, confidence DESC, created_at DESC
+                    LIMIT %s;
+                    """,
+                    (scope, limit),
+                )
+                rows = cur.fetchall()
+        return [_pg_atom_row_to_dict(r) for r in rows]
+
+    def get_stale_atoms(
+        self,
+        days_threshold: int = 90,
+        min_disagreement: float = 0.4,
+        scope: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return active atoms that are stale: old+under-supported, contested, or volatile+aged."""
+        scope_clause = "AND scope = %s" if scope else ""
+        scope_param: tuple = (scope,) if scope else ()
+
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT id, content, memory_type, scope, confidence,
+                           support_weight, disagreement_score, created_at,
+                           EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400 AS age_days
+                    FROM memory_atoms
+                    WHERE lifecycle_status = 'active'
+                      {scope_clause}
+                      AND (
+                        (NOW() - created_at > make_interval(days => %s) AND support_weight < 0.5)
+                        OR disagreement_score >= %s
+                        OR (memory_type IN ('opinion','preference','lesson','belief')
+                            AND NOW() - created_at > INTERVAL '30 days')
+                      )
+                    ORDER BY disagreement_score DESC, support_weight ASC, created_at ASC
+                    LIMIT %s;
+                    """,
+                    (*scope_param, days_threshold, min_disagreement, limit),
+                )
+                rows = cur.fetchall()
+
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            ds = float(row[6]) if row[6] is not None else 0.0
+            sw = float(row[5]) if row[5] is not None else 0.0
+            mt = row[2] or "fact"
+            age_days = int(float(row[8])) if row[8] is not None else None
+
+            reasons: list[str] = []
+            if ds >= min_disagreement:
+                reasons.append(f"contested (disagreement_score={ds:.2f})")
+            if age_days is not None and age_days > days_threshold and sw < 0.5:
+                reasons.append(f"old ({age_days}d) with low support ({sw:.2f})")
+            if mt in ("opinion", "preference", "lesson", "belief") and age_days is not None and age_days > 30:
+                reasons.append(f"volatile type '{mt}' ({age_days}d old)")
+
+            results.append({
+                "id": str(row[0]),
+                "content": row[1],
+                "memory_type": mt,
+                "scope": row[3],
+                "confidence": float(row[4]) if row[4] is not None else 0.5,
+                "support_weight": sw,
+                "disagreement_score": ds,
+                "created_at": row[7].isoformat() if row[7] is not None else None,
+                "age_days": age_days,
+                "staleness_reasons": reasons,
+            })
+        return results
+
+    def find_near_duplicate_pairs(
+        self,
+        similarity_threshold: float = 0.90,
+        scope: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Find pairs of active atoms with cosine similarity above threshold using pgvector."""
+        scope_clause = "AND a.scope = %s AND b.scope = %s" if scope else ""
+        scope_param: tuple = (scope, scope) if scope else ()
+        threshold_as_distance = 1.0 - similarity_threshold
+
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        a.id AS id_a, a.content AS content_a, a.memory_type AS type_a,
+                        a.scope AS scope_a, a.confidence AS conf_a, a.created_at AS created_a,
+                        b.id AS id_b, b.content AS content_b, b.memory_type AS type_b,
+                        b.scope AS scope_b, b.confidence AS conf_b, b.created_at AS created_b,
+                        1 - (a.embedding <=> b.embedding) AS similarity
+                    FROM memory_atoms a
+                    JOIN memory_atoms b ON a.id < b.id
+                    WHERE a.lifecycle_status = 'active'
+                      AND b.lifecycle_status = 'active'
+                      {scope_clause}
+                      AND (a.embedding <=> b.embedding) <= %s
+                    ORDER BY similarity DESC
+                    LIMIT %s;
+                    """,
+                    (*scope_param, threshold_as_distance, limit),
+                )
+                rows = cur.fetchall()
+
+        return [
+            {
+                "similarity": round(float(row[12]), 4),
+                "atom_a": {
+                    "id": str(row[0]), "content": row[1], "memory_type": row[2] or "fact",
+                    "scope": row[3], "confidence": float(row[4]) if row[4] is not None else 0.5,
+                    "created_at": row[5].isoformat() if row[5] is not None else None,
+                },
+                "atom_b": {
+                    "id": str(row[6]), "content": row[7], "memory_type": row[8] or "fact",
+                    "scope": row[9], "confidence": float(row[10]) if row[10] is not None else 0.5,
+                    "created_at": row[11].isoformat() if row[11] is not None else None,
+                },
+            }
+            for row in rows
+        ]
+
+    def list_task_runs_db(
+        self,
+        scope: str | None = None,
+        outcome: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Return recent task_run records."""
+        VALID_OUTCOMES = {"success", "partial", "failed"}
+        conditions: list[str] = []
+        params: list[Any] = []
+        if scope is not None:
+            conditions.append("scope = %s")
+            params.append(scope)
+        if outcome is not None and outcome in VALID_OUTCOMES:
+            conditions.append("outcome = %s")
+            params.append(outcome)
+        where_sql = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        params.append(limit)
+
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT id, scope, task_description, model_used,
+                           files_changed, outcome, lessons_stored, created_at
+                    FROM task_runs {where_sql}
+                    ORDER BY created_at DESC LIMIT %s;
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+        return [
+            {
+                "id": str(r[0]),
+                "scope": r[1],
+                "task_description": r[2],
+                "model_used": r[3],
+                "files_changed": r[4],
+                "outcome": r[5],
+                "lessons_stored": r[6],
+                "created_at": r[7].isoformat() if r[7] else None,
+            }
+            for r in rows
+        ]
+
+    def get_atom_with_signals(self, memory_id: str) -> dict[str, Any] | None:
+        """Fetch a single atom with its signals summary."""
+        _empty = {"count": 0, "top_sources": [], "most_recent_signal_at": None}
+
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, content, context_summary, memory_type, scope,
+                           confidence, importance, support_weight, opposition_weight,
+                           disagreement_score, last_recomputed_at, created_at,
+                           lifecycle_status, superseded_by_atom_id, lifecycle_reason,
+                           retrieval_priority, lifecycle_updated_at
+                    FROM memory_atoms WHERE id = %s;
+                    """,
+                    (memory_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return None
+
+            # signals summary
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*), MAX(created_at) FROM memory_signals WHERE memory_atom_id = %s;",
+                    (memory_id,),
+                )
+                sig_count_row = cur.fetchone()
+                sig_count = int(sig_count_row[0]) if sig_count_row else 0
+                sig_recent = sig_count_row[1].isoformat() if sig_count_row and sig_count_row[1] else None
+
+                cur.execute(
+                    """
+                    SELECT source_key FROM (
+                        SELECT source_key, MAX(created_at) AS last_seen
+                        FROM memory_signals WHERE memory_atom_id = %s
+                        GROUP BY source_key ORDER BY last_seen DESC LIMIT 3
+                    ) sub;
+                    """,
+                    (memory_id,),
+                )
+                top_sources = [r[0] for r in cur.fetchall()]
+
+        sig_summary = {"count": sig_count, "top_sources": top_sources, "most_recent_signal_at": sig_recent}
+        atom_id_str = str(row[0])
+        ds = float(row[9])
+        return {
+            "id": atom_id_str,
+            "content": row[1],
+            "context_summary": row[2],
+            "memory_type": row[3],
+            "scope": row[4],
+            "confidence": float(row[5]),
+            "importance": float(row[6]),
+            "support_weight": float(row[7]),
+            "opposition_weight": float(row[8]),
+            "disagreement_score": ds,
+            "disagreement_flag": ds >= 0.5,
+            "last_recomputed_at": row[10].isoformat() if row[10] else None,
+            "created_at": row[11].isoformat() if row[11] else None,
+            "lifecycle_status": row[12],
+            "superseded_by_atom_id": str(row[13]) if row[13] else None,
+            "lifecycle_reason": row[14],
+            "retrieval_priority": float(row[15]),
+            "lifecycle_updated_at": row[16].isoformat() if row[16] else None,
+            "signals_summary": sig_summary,
+        }
+
+    def get_atom_signals_db(
+        self, memory_atom_id: str, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """Return signals for an atom, newest first."""
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, memory_atom_id, parent_signal_id, source_key,
+                           source_type, source_id, content, context_summary,
+                           memory_type, scope, subject, stance, relationship,
+                           certainty, intensity, confidence, importance,
+                           reconciliation_reason, created_at
+                    FROM memory_signals
+                    WHERE memory_atom_id = %s
+                    ORDER BY created_at DESC LIMIT %s;
+                    """,
+                    (memory_atom_id, limit),
+                )
+                rows = cur.fetchall()
+        return [
+            {
+                "id": str(r[0]),
+                "memory_atom_id": str(r[1]) if r[1] else None,
+                "parent_signal_id": str(r[2]) if r[2] else None,
+                "source_key": r[3], "source_type": r[4], "source_id": r[5],
+                "content": r[6], "context_summary": r[7],
+                "memory_type": r[8], "scope": r[9],
+                "subject": r[10], "stance": r[11], "relationship": r[12],
+                "certainty": float(r[13]) if r[13] is not None else None,
+                "intensity": float(r[14]) if r[14] is not None else None,
+                "confidence": float(r[15]) if r[15] is not None else None,
+                "importance": float(r[16]) if r[16] is not None else None,
+                "reconciliation_reason": r[17],
+                "created_at": r[18].isoformat() if r[18] else None,
+            }
+            for r in rows
+        ]
+
+    def search_memories_full(
+        self,
+        query: str,
+        limit: int = 5,
+        scope: str | None = None,
+        memory_type: str | None = None,
+        min_similarity: float = 0.0,
+    ) -> list[dict[str, Any]]:
+        """Semantic search with signals summary included."""
+        embedding = self.ollama.embed_text(query)
+        embedding_literal = self._vector_literal(embedding)
+        clamped_min_similarity = max(0.0, min(float(min_similarity), 1.0))
+
+        where_clauses: list[str] = ["lifecycle_status != 'archived'"]
+        filter_params: list[Any] = []
+        if scope:
+            where_clauses.append("scope = %s")
+            filter_params.append(scope)
+        if memory_type:
+            where_clauses.append("memory_type = %s")
+            filter_params.append(memory_type)
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+        params: list[Any] = [embedding_literal] + filter_params + [embedding_literal, limit]
+
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT id, content, context_summary, memory_type, scope,
+                           confidence, importance,
+                           1 - (embedding <=> %s::vector) AS similarity,
+                           created_at, support_weight, opposition_weight,
+                           disagreement_score, last_recomputed_at,
+                           lifecycle_status, superseded_by_atom_id, lifecycle_reason,
+                           retrieval_priority, lifecycle_updated_at
+                    FROM memory_atoms {where_sql}
+                    ORDER BY embedding <=> %s::vector LIMIT %s;
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+
+            valid_rows = [(r, float(r[7])) for r in rows if float(r[7]) >= clamped_min_similarity]
+            atom_ids = [str(r[0]) for r, _ in valid_rows]
+
+            # signals summary batch
+            sigs: dict[str, Any] = {}
+            if atom_ids:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT memory_atom_id::text, COUNT(*), MAX(created_at) "
+                        "FROM memory_signals WHERE memory_atom_id = ANY(%s::uuid[]) "
+                        "GROUP BY memory_atom_id;",
+                        (atom_ids,),
+                    )
+                    for sg in cur.fetchall():
+                        sigs[sg[0]] = {
+                            "count": int(sg[1]),
+                            "most_recent_signal_at": sg[2].isoformat() if sg[2] else None,
+                            "top_sources": [],
+                        }
+                if sigs:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT atom_id, source_key FROM (
+                                SELECT memory_atom_id::text AS atom_id, source_key,
+                                       ROW_NUMBER() OVER (PARTITION BY memory_atom_id
+                                           ORDER BY MAX(created_at) DESC NULLS LAST) AS rn
+                                FROM memory_signals WHERE memory_atom_id = ANY(%s::uuid[])
+                                GROUP BY memory_atom_id, source_key
+                            ) sub WHERE rn <= 3 ORDER BY atom_id, rn;
+                            """,
+                            (atom_ids,),
+                        )
+                        for sg in cur.fetchall():
+                            if sg[0] in sigs:
+                                sigs[sg[0]]["top_sources"].append(sg[1])
+
+        _empty = {"count": 0, "top_sources": [], "most_recent_signal_at": None}
+        results: list[dict[str, Any]] = []
+        for row, similarity in valid_rows:
+            ds = float(row[11])
+            results.append({
+                "id": str(row[0]),
+                "content": row[1],
+                "context_summary": row[2],
+                "memory_type": row[3],
+                "scope": row[4],
+                "confidence": float(row[5]),
+                "importance": float(row[6]),
+                "similarity": similarity,
+                "created_at": row[8].isoformat() if row[8] else None,
+                "support_weight": float(row[9]),
+                "opposition_weight": float(row[10]),
+                "disagreement_score": ds,
+                "last_recomputed_at": row[12].isoformat() if row[12] else None,
+                "disagreement_flag": ds >= 0.5,
+                "lifecycle_status": row[13],
+                "superseded_by_atom_id": str(row[14]) if row[14] else None,
+                "lifecycle_reason": row[15],
+                "retrieval_priority": float(row[16]),
+                "lifecycle_updated_at": row[17].isoformat() if row[17] else None,
+                "signals_summary": sigs.get(str(row[0]), _empty),
+            })
+        return results
+
+    def log_conversation_turn(
+        self,
+        user_message: str,
+        assistant_response: str,
+        retrieved_atom_ids: list[str],
+        used_atom_ids: list[str],
+        context_status: str,
+        verdict: str,
+        confidence: float,
+        reasoning: str,
+        source: str = "mcp_copilot",
+        final_action: str = "answer",
+    ) -> dict[str, Any]:
+        """Write a conversation turn to the audit tables."""
+        import json as _json
+        task_summary = (user_message[:200] + "…") if len(user_message) > 200 else user_message
+
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO runtime_context_traces (
+                        task_summary, retrieved_atom_ids, used_atom_ids,
+                        ignored_atom_ids, context_status, confidence,
+                        issues, required_actions, final_action
+                    ) VALUES (%s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s::jsonb, %s::jsonb, %s)
+                    RETURNING id;
+                    """,
+                    (
+                        task_summary,
+                        _json.dumps(retrieved_atom_ids),
+                        _json.dumps(used_atom_ids),
+                        _json.dumps([]),
+                        context_status,
+                        confidence,
+                        _json.dumps([]),
+                        _json.dumps([]),
+                        final_action,
+                    ),
+                )
+                context_trace_id = str(cur.fetchone()[0])
+
+                cur.execute(
+                    """
+                    INSERT INTO runtime_response_traces (
+                        user_message, draft_answer, final_answer,
+                        verdict, overstatement_risk, issues, commit_candidates,
+                        reasoning, context_trace_id,
+                        gap_status, gap_searches, gap_clarifying_question
+                    ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s::uuid, %s, %s, %s)
+                    RETURNING id;
+                    """,
+                    (
+                        (user_message or "")[:1000],
+                        (assistant_response or "")[:4000],
+                        (assistant_response or "")[:4000],
+                        verdict,
+                        "none",
+                        _json.dumps([]),
+                        _json.dumps([]),
+                        (f"[{source}] " + (reasoning or ""))[:500],
+                        context_trace_id,
+                        "resolved",
+                        0,
+                        None,
+                    ),
+                )
+                response_trace_id = str(cur.fetchone()[0])
+            conn.commit()
+
+        return {
+            "context_trace_id": context_trace_id,
+            "response_trace_id": response_trace_id,
+            "status": "logged",
+        }
+
+    def get_and_claim_proposal(
+        self, proposal_id: str, approval_token: str
+    ) -> dict[str, Any]:
+        """Look up a proposal, validate token, mark as used. Returns proposal data or error dict."""
+        from datetime import datetime, timezone
+        now_utc = datetime.now(tz=timezone.utc)
+
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, status, content, context_summary, memory_type, scope,
+                           confidence, importance, relationship, reconciliation_reason,
+                           matched_memory_ids, approval_token, token_expires_at
+                    FROM memory_proposals WHERE id = %s;
+                    """,
+                    (proposal_id.strip(),),
+                )
+                row = cur.fetchone()
+
+            if row is None:
+                return {"error": f"proposal '{proposal_id}' not found"}
+
+            p_id, p_status, p_content, p_context_summary, p_memory_type, p_scope, \
+                p_confidence, p_importance, p_relationship, p_reconciliation_reason, \
+                p_matched_ids_json, p_token, p_token_expires_at = row
+
+            if p_status == "used":
+                return {"error": "proposal already used"}
+            if p_status == "rejected":
+                return {"error": "proposal was rejected"}
+            if p_status == "expired":
+                return {"error": "proposal has expired"}
+            if p_status != "approved":
+                return {"error": f"proposal status is '{p_status}', expected 'approved'. Run `make review-proposals`."}
+            if p_token is None or p_token != approval_token.strip():
+                return {"error": "invalid approval token"}
+            if p_token_expires_at is None or now_utc > p_token_expires_at:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE memory_proposals SET status = 'expired' WHERE id = %s", (p_id,))
+                conn.commit()
+                return {"error": "approval token has expired. Run `make review-proposals` again."}
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE memory_proposals SET status = 'used', reviewed_at = now() WHERE id = %s",
+                    (p_id,),
+                )
+            conn.commit()
+
+        return {
+            "content": p_content,
+            "context_summary": p_context_summary,
+            "memory_type": p_memory_type,
+            "scope": p_scope,
+            "confidence": float(p_confidence),
+            "importance": float(p_importance),
+            "relationship": p_relationship,
+            "reconciliation_reason": p_reconciliation_reason,
+            "matched_memory_ids": p_matched_ids_json,
+        }
+
+
+def _pg_atom_row_to_dict(row: tuple) -> dict[str, Any]:
+    """Convert a 17-column memory_atoms SELECT row to a dict."""
+    ds = float(row[10]) if row[10] is not None else 0.0
+    return {
+        "id": str(row[0]),
+        "content": row[1],
+        "context_summary": row[2],
+        "memory_type": row[3],
+        "scope": row[4],
+        "confidence": float(row[5]),
+        "importance": float(row[6]),
+        "created_at": row[7].isoformat() if row[7] else None,
+        "support_weight": float(row[8]) if row[8] is not None else 0.0,
+        "opposition_weight": float(row[9]) if row[9] is not None else 0.0,
+        "disagreement_score": ds,
+        "last_recomputed_at": row[11].isoformat() if row[11] else None,
+        "disagreement_flag": ds >= 0.5,
+        "lifecycle_status": row[12] or "active",
+        "superseded_by_atom_id": str(row[13]) if row[13] else None,
+        "lifecycle_reason": row[14],
+        "retrieval_priority": float(row[15]) if row[15] is not None else 1.0,
+        "lifecycle_updated_at": row[16].isoformat() if row[16] else None,
+    }

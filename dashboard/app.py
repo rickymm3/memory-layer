@@ -26,6 +26,8 @@ from app.chat import (
     clean_assistant_response,
 )
 from app.config import get_config
+from app.db import get_store
+from app.generation import get_image_provider, get_video_provider, list_recent_images
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("DASHBOARD_SECRET_KEY", "memory-layer-local-dev-only")
@@ -859,4 +861,48 @@ def task_run_detail(run_id):
     ]
 
     return render_template("task_run_detail.html", run=run, lessons=lessons)
+
+
+# ── Generation ────────────────────────────────────────────────────────────────
+
+@app.route("/health")
+def health():
+    report = get_store().health_report()
+    return render_template("health.html", r=report)
+
+
+@app.route("/generate")
+def generate():
+    img_provider = get_image_provider()
+    vid_provider = get_video_provider()
+    last_image = session.pop("last_image", None)
+    last_video = session.pop("last_video", None)
+    recent = list_recent_images(24)
+    return render_template(
+        "generate.html",
+        image_provider=img_provider.name,
+        image_available=img_provider.available,
+        video_provider=vid_provider.name,
+        video_available=vid_provider.available,
+        last_image=last_image,
+        last_video=last_video,
+        gallery=recent,
+    )
+
+
+@app.route("/generate/image", methods=["POST"])
+def generate_image():
+    prompt = request.form.get("prompt", "").strip()
+    size = request.form.get("size", "1024x1024")
+    result = get_image_provider().generate(prompt=prompt, size=size)
+    session["last_image"] = result.to_dict()
+    return redirect(url_for("generate"))
+
+
+@app.route("/generate/video", methods=["POST"])
+def generate_video():
+    prompt = request.form.get("prompt", "").strip()
+    result = get_video_provider().generate(prompt=prompt)
+    session["last_video"] = result.to_dict()
+    return redirect(url_for("generate"))
 
