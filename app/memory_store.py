@@ -1668,6 +1668,7 @@ class MemoryStore:
 
     _VALID_RELATION_TYPES: frozenset[str] = frozenset({
         "supports", "contradicts", "specializes", "generalizes", "related",
+        "supports_belief",
     })
 
     def link_atoms(
@@ -1769,6 +1770,304 @@ class MemoryStore:
                     frontier = next_frontier
 
         return results
+
+    # ── Compaction ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _frame_historical_atom(atom: dict[str, Any]) -> dict[str, Any]:
+        """Attach a human-readable temporal frame to a historical atom dict.
+
+        The frame is pre-built so the LLM can consume it without needing to
+        reason about lifecycle metadata on every turn.
+        """
+        peak_conf = atom.get("peak_confidence") or atom.get("confidence", 0.0)
+        peak_sw = atom.get("peak_support_weight") or atom.get("support_weight", 0.0)
+        status = atom.get("lifecycle_status", "deprecated")
+        updated = atom.get("lifecycle_updated_at") or atom.get("created_at", "")
+        if hasattr(updated, "strftime"):
+            updated = updated.strftime("%Y-%m-%d")
+        elif isinstance(updated, str) and "T" in updated:
+            updated = updated[:10]
+
+        signals_phrase = (
+            f"{peak_sw:.1f} reinforcing signals" if peak_sw >= 1 else "no reinforcing signals"
+        )
+        frame = (
+            f"[Historical — {status} as of {updated}; "
+            f"peak confidence {peak_conf:.2f}, {signals_phrase}]"
+        )
+        return {**atom, "historical_frame": frame}
+
+    def compact_atoms_to_belief(
+        self,
+        *,
+        eligible_ids: list[str],
+        auto_deprecate_ids: list[str],
+        belief_content: str,
+        scope: str | None,
+        synthesis_reason: str,
+        source_key: str = "local_user",
+    ) -> dict[str, Any]:
+        """Compact a cluster of atoms into a canonical belief atom.
+
+        eligible_ids: above-weight-threshold atoms → become 'evidence'
+        auto_deprecate_ids: below-threshold atoms → become 'deprecated'
+
+        Steps:
+          1. Record peak_confidence / peak_support_weight on each input atom.
+          2. Transition eligible atoms to 'evidence', deprecated to 'deprecated'.
+          3. Create a belief atom (memory_type='belief') anchored to the max
+             confidence/importance of the eligible set.
+          4. Write 'supports_belief' edges from each eligible atom to the belief.
+          5. Log each transition in belief_revision_log with event_type='compact'.
+
+        Returns {belief_atom_id, evidence_count, deprecated_count, relation_ids}.
+        """
+        if not eligible_ids:
+            raise ValueError("compact_atoms_to_belief requires at least one eligible_id")
+
+        all_ids = eligible_ids + auto_deprecate_ids
+
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                # Fetch current values to snapshot peak metrics
+                cur.execute(
+                    """
+                    SELECT id::text, content, confidence, importance,
+                           support_weight, opposition_weight, scope, memory_type
+                    FROM memory_atoms
+                    WHERE id = ANY(%s::uuid[])
+                    """,
+                    (all_ids,),
+                )
+                rows = {r[0]: r for r in cur.fetchall()}
+
+            eligible_rows = [rows[i] for i in eligible_ids if i in rows]
+            if not eligible_rows:
+                raise ValueError("None of the eligible_ids were found in memory_atoms")
+
+            belief_confidence = max(float(r[2]) for r in eligible_rows)
+            belief_importance = max(float(r[3]) for r in eligible_rows)
+            effective_scope = scope or eligible_rows[0][6]
+
+            with conn.cursor() as cur:
+                # Record peak values and transition lifecycle for all input atoms
+                for atom_id in eligible_ids:
+                    if atom_id not in rows:
+                        continue
+                    r = rows[atom_id]
+                    cur.execute(
+                        """
+                        UPDATE memory_atoms
+                        SET lifecycle_status    = 'evidence',
+                            peak_confidence     = %s,
+                            peak_support_weight = %s,
+                            lifecycle_reason    = %s,
+                            lifecycle_updated_at = NOW()
+                        WHERE id = %s::uuid
+                        """,
+                        (float(r[2]), float(r[4]), synthesis_reason, atom_id),
+                    )
+
+                for atom_id in auto_deprecate_ids:
+                    if atom_id not in rows:
+                        continue
+                    r = rows[atom_id]
+                    cur.execute(
+                        """
+                        UPDATE memory_atoms
+                        SET lifecycle_status    = 'deprecated',
+                            peak_confidence     = %s,
+                            peak_support_weight = %s,
+                            lifecycle_reason    = %s,
+                            lifecycle_updated_at = NOW()
+                        WHERE id = %s::uuid
+                        """,
+                        (float(r[2]), float(r[4]), f"auto-deprecated (low weight) during compaction: {synthesis_reason}", atom_id),
+                    )
+
+                # Create the belief atom
+                cur.execute(
+                    """
+                    INSERT INTO memory_atoms
+                        (content, memory_type, scope, confidence, importance,
+                         support_weight, lifecycle_status, created_at,
+                         last_recomputed_at, retrieval_priority)
+                    VALUES (%s, 'belief', %s, %s, %s, %s, 'active', NOW(), NOW(), %s)
+                    RETURNING id::text
+                    """,
+                    (
+                        belief_content,
+                        effective_scope,
+                        belief_confidence,
+                        belief_importance,
+                        # Start with combined support weight as proxy
+                        sum(float(r[4]) for r in eligible_rows),
+                        belief_confidence * belief_importance,
+                    ),
+                )
+                belief_id = cur.fetchone()[0]
+
+                # Link evidence atoms to the belief
+                relation_ids: list[str] = []
+                for atom_id in eligible_ids:
+                    if atom_id not in rows:
+                        continue
+                    cur.execute(
+                        """
+                        INSERT INTO memory_atom_relations
+                            (atom_a_id, atom_b_id, relation_type, confidence, source_key)
+                        VALUES (%s::uuid, %s::uuid, 'supports_belief', %s, %s)
+                        ON CONFLICT DO NOTHING
+                        RETURNING id::text
+                        """,
+                        (atom_id, belief_id, belief_confidence, source_key),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        relation_ids.append(row[0])
+
+                # Log each compaction event in belief_revision_log
+                for atom_id in eligible_ids:
+                    if atom_id not in rows:
+                        continue
+                    r = rows[atom_id]
+                    cur.execute(
+                        """
+                        INSERT INTO belief_revision_log
+                            (atom_id, prior_atom_id, prior_content, new_content,
+                             prior_confidence, new_confidence, memory_type, scope,
+                             event_type, revision_reason, source_key)
+                        VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s,
+                                'compact', %s, %s)
+                        """,
+                        (
+                            belief_id, atom_id, r[1], belief_content,
+                            float(r[2]), belief_confidence,
+                            r[7], effective_scope,
+                            synthesis_reason, source_key,
+                        ),
+                    )
+
+                conn.commit()
+
+        return {
+            "belief_atom_id": belief_id,
+            "evidence_count": len([i for i in eligible_ids if i in rows]),
+            "deprecated_count": len([i for i in auto_deprecate_ids if i in rows]),
+            "relation_ids": relation_ids,
+        }
+
+    def retrieve_with_history(
+        self,
+        query: str,
+        limit: int = 5,
+        history_limit: int = 3,
+        scope_filter: str | None = None,
+        min_similarity: float | None = None,
+    ) -> dict[str, Any]:
+        """Retrieve current atoms plus semantically relevant historical atoms.
+
+        Returns:
+            {
+                "current":   [active/belief atoms, ranked by composite score],
+                "historical":[evidence/deprecated/superseded atoms, with
+                              'historical_frame' key pre-built for LLM use]
+            }
+        """
+        embedding = self.ollama.embed_text(query)
+        embedding_literal = self._vector_literal(embedding)
+        threshold = min_similarity if min_similarity is not None else self.config.memory_retrieval_threshold
+
+        scope_clause = "AND (scope = %s OR scope IS NULL OR scope = 'global')" if scope_filter else ""
+        scope_params: tuple = (scope_filter,) if scope_filter else ()
+
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                # Current pool: active + belief atoms
+                cur.execute(
+                    f"""
+                    WITH scored AS (
+                        SELECT id, content, context_summary, memory_type, scope,
+                               confidence, importance,
+                               1 - (embedding <=> %s::vector) AS similarity,
+                               created_at, lifecycle_status, support_weight,
+                               opposition_weight, disagreement_score,
+                               peak_confidence, peak_support_weight,
+                               lifecycle_updated_at
+                        FROM memory_atoms
+                        WHERE lifecycle_status IN ('active', 'belief')
+                          {scope_clause}
+                    )
+                    SELECT *,
+                        (similarity * 0.60 + confidence * 0.25
+                         - COALESCE(disagreement_score, 0.0) * 0.15)
+                        * CASE WHEN memory_type IN ('opinion','preference','lesson','belief')
+                               THEN GREATEST(0.3, EXP(
+                                   -LN(2) * EXTRACT(EPOCH FROM (NOW() - created_at)) / (90.0 * 86400)
+                               ))
+                               ELSE 1.0 END AS composite_score
+                    FROM scored
+                    WHERE similarity >= %s
+                    ORDER BY composite_score DESC
+                    LIMIT %s
+                    """,
+                    (embedding_literal, *scope_params, threshold, limit),
+                )
+                current_rows = cur.fetchall()
+
+                # Historical pool: evidence + deprecated + superseded
+                cur.execute(
+                    f"""
+                    SELECT id, content, context_summary, memory_type, scope,
+                           confidence, importance,
+                           1 - (embedding <=> %s::vector) AS similarity,
+                           created_at, lifecycle_status, support_weight,
+                           opposition_weight, disagreement_score,
+                           peak_confidence, peak_support_weight,
+                           lifecycle_updated_at
+                    FROM memory_atoms
+                    WHERE lifecycle_status IN ('evidence', 'deprecated', 'superseded')
+                      {scope_clause}
+                      AND 1 - (embedding <=> %s::vector) >= %s
+                    ORDER BY
+                        COALESCE(peak_confidence, confidence) DESC,
+                        created_at DESC
+                    LIMIT %s
+                    """,
+                    (embedding_literal, *scope_params, embedding_literal, threshold, history_limit),
+                )
+                history_rows = cur.fetchall()
+
+        def _row_to_dict(row: tuple) -> dict[str, Any]:
+            ca = row[8]
+            lu = row[15]
+            return {
+                "id": str(row[0]),
+                "content": row[1],
+                "context_summary": row[2],
+                "memory_type": row[3],
+                "scope": row[4],
+                "confidence": float(row[5]),
+                "importance": float(row[6]),
+                "similarity": float(row[7]),
+                "created_at": ca.isoformat() if ca else None,
+                "lifecycle_status": row[9] or "active",
+                "support_weight": float(row[10]) if row[10] is not None else 0.0,
+                "opposition_weight": float(row[11]) if row[11] is not None else 0.0,
+                "disagreement_score": float(row[12]) if row[12] is not None else 0.0,
+                "peak_confidence": float(row[13]) if row[13] is not None else None,
+                "peak_support_weight": float(row[14]) if row[14] is not None else None,
+                "lifecycle_updated_at": lu.isoformat() if lu else None,
+            }
+
+        current = [_row_to_dict(r) for r in current_rows]
+        historical = [
+            self._frame_historical_atom(_row_to_dict(r))
+            for r in history_rows
+        ]
+
+        return {"current": current, "historical": historical}
 
     def list_task_runs_db(
         self,

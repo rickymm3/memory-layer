@@ -42,6 +42,7 @@ from mcp_server.tools.stale_atoms import get_stale_atoms as _get_stale_atoms_imp
 from mcp_server.tools.find_duplicates import find_duplicate_atoms as _find_duplicates_impl
 from mcp_server.tools.link_atoms import link_atoms as _link_atoms_impl
 from mcp_server.tools.related_atoms import get_related_atoms as _related_atoms_impl
+from mcp_server.tools.compact_cluster import compact_cluster as _compact_cluster_impl
 
 mcp = FastMCP("memoryLayer")
 
@@ -833,6 +834,52 @@ def memory_related(
         atom_id=atom_id,
         depth=depth,
         relation_types=relation_types,
+    )
+
+
+@mcp.tool()
+async def memory_compact_cluster(
+    eligible_atom_ids: list[str],
+    belief_content: str,
+    synthesis_reason: str,
+    auto_deprecate_atom_ids: list[str] | None = None,
+    scope: str | None = None,
+) -> dict:
+    """Compact a cluster of semantically similar atoms into a canonical belief atom.
+
+    Call this after evaluating a group of atoms retrieved via memory_search or
+    memory_find_duplicates and determining they express the same underlying belief.
+
+    Weight-gated compaction:
+      - eligible_atom_ids: atoms above the weight threshold (confidence *
+        importance * support_weight > 0.3). These become lifecycle_status='evidence'
+        and are linked to the belief via supports_belief edges. They remain
+        retrievable as provenance but exit the active retrieval pool.
+      - auto_deprecate_atom_ids: atoms below the weight threshold. These become
+        lifecycle_status='deprecated' — removed from active retrieval but preserved
+        as historical record with their peak_confidence recorded.
+
+    Belief synthesis rules (enforced by caller):
+      - belief_content must be anchored in the highest-weighted eligible atom's
+        wording — do not average or dilute it
+      - Enrich with unique context from lower-weighted atoms if they add something
+        the anchor atom does not capture
+      - belief_content must be fully self-contained (no "Phase N", "as discussed",
+        "the fix from earlier")
+
+    The belief atom starts with confidence = max(eligible confidences) and
+    importance = max(eligible importances). It enters active retrieval
+    immediately and will be preferred over its evidence atoms.
+
+    Returns:
+        {belief_atom_id, evidence_count, deprecated_count, relation_ids}
+    """
+    return await _compact_cluster_impl(
+        eligible_atom_ids=eligible_atom_ids,
+        belief_content=belief_content,
+        synthesis_reason=synthesis_reason,
+        auto_deprecate_atom_ids=auto_deprecate_atom_ids,
+        scope=scope,
     )
 
 

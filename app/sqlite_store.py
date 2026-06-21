@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS memory_atoms (
     lifecycle_reason TEXT,
     retrieval_priority REAL NOT NULL DEFAULT 1.0,
     lifecycle_updated_at TEXT,
+    peak_confidence REAL,
+    peak_support_weight REAL,
     source_type TEXT,
     source_url TEXT
 );
@@ -1262,6 +1264,7 @@ class SQLiteStore:
 
     _VALID_RELATION_TYPES: frozenset[str] = frozenset({
         "supports", "contradicts", "specializes", "generalizes", "related",
+        "supports_belief",
     })
 
     def link_atoms(
@@ -1359,6 +1362,184 @@ class SQLiteStore:
                 frontier = next_frontier
 
         return results
+
+    # ── Compaction ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _frame_historical_atom(atom: dict[str, Any]) -> dict[str, Any]:
+        """Attach a temporal frame string to a historical atom for LLM context."""
+        peak_conf = atom.get("peak_confidence") or atom.get("confidence", 0.0)
+        peak_sw = atom.get("peak_support_weight") or atom.get("support_weight", 0.0)
+        status = atom.get("lifecycle_status", "deprecated")
+        updated = atom.get("lifecycle_updated_at") or atom.get("created_at", "")
+        if isinstance(updated, str) and "T" in updated:
+            updated = updated[:10]
+        signals_phrase = (
+            f"{peak_sw:.1f} reinforcing signals" if peak_sw >= 1 else "no reinforcing signals"
+        )
+        frame = (
+            f"[Historical — {status} as of {updated}; "
+            f"peak confidence {peak_conf:.2f}, {signals_phrase}]"
+        )
+        return {**atom, "historical_frame": frame}
+
+    def compact_atoms_to_belief(
+        self,
+        *,
+        eligible_ids: list[str],
+        auto_deprecate_ids: list[str],
+        belief_content: str,
+        scope: str | None,
+        synthesis_reason: str,
+        source_key: str = "local_user",
+    ) -> dict[str, Any]:
+        """Compact a cluster of atoms into a canonical belief atom (SQLite)."""
+        if not eligible_ids:
+            raise ValueError("compact_atoms_to_belief requires at least one eligible_id")
+
+        all_ids = eligible_ids + auto_deprecate_ids
+        placeholders = ",".join("?" * len(all_ids))
+
+        with self._connect() as conn:
+            rows_raw = conn.execute(
+                f"SELECT id, content, confidence, importance, support_weight, scope, memory_type "
+                f"FROM memory_atoms WHERE id IN ({placeholders})",
+                all_ids,
+            ).fetchall()
+
+        rows = {r[0]: r for r in rows_raw}
+        eligible_rows = [rows[i] for i in eligible_ids if i in rows]
+        if not eligible_rows:
+            raise ValueError("None of the eligible_ids were found in memory_atoms")
+
+        belief_confidence = max(float(r[2]) for r in eligible_rows)
+        belief_importance = max(float(r[3]) for r in eligible_rows)
+        effective_scope = scope or eligible_rows[0][5]
+        belief_id = _uid()
+        now = _now()
+
+        with self._connect() as conn:
+            # Transition eligible → evidence
+            for atom_id in eligible_ids:
+                if atom_id not in rows:
+                    continue
+                r = rows[atom_id]
+                conn.execute(
+                    """UPDATE memory_atoms
+                       SET lifecycle_status='evidence',
+                           peak_confidence=?, peak_support_weight=?,
+                           lifecycle_reason=?, lifecycle_updated_at=?
+                       WHERE id=?""",
+                    (float(r[2]), float(r[4]), synthesis_reason, now, atom_id),
+                )
+
+            # Transition low-weight → deprecated
+            for atom_id in auto_deprecate_ids:
+                if atom_id not in rows:
+                    continue
+                r = rows[atom_id]
+                conn.execute(
+                    """UPDATE memory_atoms
+                       SET lifecycle_status='deprecated',
+                           peak_confidence=?, peak_support_weight=?,
+                           lifecycle_reason=?, lifecycle_updated_at=?
+                       WHERE id=?""",
+                    (float(r[2]), float(r[4]),
+                     f"auto-deprecated (low weight) during compaction: {synthesis_reason}",
+                     now, atom_id),
+                )
+
+            # Create belief atom
+            conn.execute(
+                """INSERT INTO memory_atoms
+                   (id, content, memory_type, scope, confidence, importance,
+                    support_weight, lifecycle_status, created_at, last_recomputed_at)
+                   VALUES (?,?,'belief',?,?,?,?,  'active',?,?)""",
+                (belief_id, belief_content, effective_scope,
+                 belief_confidence, belief_importance,
+                 sum(float(r[4]) for r in eligible_rows),
+                 now, now),
+            )
+
+            # Write supports_belief edges
+            relation_ids: list[str] = []
+            for atom_id in eligible_ids:
+                if atom_id not in rows:
+                    continue
+                rel_id = _uid()
+                conn.execute(
+                    """INSERT OR IGNORE INTO memory_atom_relations
+                       (id, atom_a_id, atom_b_id, relation_type, confidence, created_at, source_key)
+                       VALUES (?,?,?,'supports_belief',?,?,?)""",
+                    (rel_id, atom_id, belief_id, belief_confidence, now, source_key),
+                )
+                relation_ids.append(rel_id)
+
+        return {
+            "belief_atom_id": belief_id,
+            "evidence_count": len([i for i in eligible_ids if i in rows]),
+            "deprecated_count": len([i for i in auto_deprecate_ids if i in rows]),
+            "relation_ids": relation_ids,
+        }
+
+    def retrieve_with_history(
+        self,
+        query: str,
+        limit: int = 5,
+        history_limit: int = 3,
+        scope_filter: str | None = None,
+        min_similarity: float | None = None,
+    ) -> dict[str, Any]:
+        """Retrieve current atoms plus semantically relevant historical atoms."""
+        embedding = get_embedding_client().embed_text(query)
+        threshold = min_similarity if min_similarity is not None else 0.3
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT id, content, context_summary, memory_type, scope,
+                          confidence, importance, created_at, lifecycle_status,
+                          support_weight, opposition_weight, disagreement_score,
+                          peak_confidence, peak_support_weight, lifecycle_updated_at,
+                          embedding
+                   FROM memory_atoms
+                   WHERE lifecycle_status IN ('active','belief','evidence','deprecated','superseded')
+                """,
+            ).fetchall()
+
+        current, historical = [], []
+        for row in rows:
+            stored_emb = json.loads(row[15]) if row[15] else []
+            if not stored_emb:
+                continue
+            sim = _cosine(embedding, stored_emb)
+            if sim < threshold:
+                continue
+            status = row[8] or "active"
+            atom = {
+                "id": row[0], "content": row[1], "context_summary": row[2],
+                "memory_type": row[3], "scope": row[4],
+                "confidence": float(row[5]), "importance": float(row[6]),
+                "similarity": round(sim, 4),
+                "created_at": row[7], "lifecycle_status": status,
+                "support_weight": float(row[9]) if row[9] is not None else 0.0,
+                "opposition_weight": float(row[10]) if row[10] is not None else 0.0,
+                "disagreement_score": float(row[11]) if row[11] is not None else 0.0,
+                "peak_confidence": float(row[12]) if row[12] is not None else None,
+                "peak_support_weight": float(row[13]) if row[13] is not None else None,
+                "lifecycle_updated_at": row[14],
+            }
+            if status in ("active", "belief"):
+                score = sim * 0.60 + float(row[5]) * 0.25
+                atom["composite_score"] = round(score, 4)
+                current.append(atom)
+            else:
+                historical.append(self._frame_historical_atom(atom))
+
+        current.sort(key=lambda x: x.get("composite_score", 0), reverse=True)
+        historical.sort(
+            key=lambda x: x.get("peak_confidence") or x.get("confidence", 0), reverse=True
+        )
+        return {"current": current[:limit], "historical": historical[:history_limit]}
 
     def list_task_runs_db(
         self, scope: str | None = None, outcome: str | None = None, limit: int = 10

@@ -658,3 +658,94 @@ def test_context_efficiency_trend_populated(store: SQLiteStore):
     assert "date" in day
     assert "avg_user_tokens" in day
     assert "avg_retrieved_tokens" in day
+
+
+# ── Compaction ─────────────────────────────────────────────────────────────────
+
+def test_compact_atoms_to_belief_creates_belief(store: SQLiteStore):
+    a1, _ = store.store_memory_with_signal("User prefers concise replies.", memory_type="preference", importance=0.8)
+    a2, _ = store.store_memory_with_signal("Get to the point.", memory_type="preference", importance=0.7)
+    result = store.compact_atoms_to_belief(
+        eligible_ids=[a1, a2],
+        auto_deprecate_ids=[],
+        belief_content="User strongly prefers concise, direct communication and dislikes verbose responses.",
+        scope="user",
+        synthesis_reason="Three similar preference atoms expressing the same belief about communication style.",
+    )
+    assert "belief_atom_id" in result
+    assert result["evidence_count"] == 2
+    assert result["deprecated_count"] == 0
+    assert len(result["relation_ids"]) == 2
+
+
+def test_compact_transitions_eligible_to_evidence(store: SQLiteStore):
+    a1, _ = store.store_memory_with_signal("User likes short answers.", memory_type="preference")
+    store.compact_atoms_to_belief(
+        eligible_ids=[a1],
+        auto_deprecate_ids=[],
+        belief_content="User prefers brief responses.",
+        scope="user",
+        synthesis_reason="test",
+    )
+    import sqlite3
+    with store._connect() as conn:
+        row = conn.execute(
+            "SELECT lifecycle_status, peak_confidence FROM memory_atoms WHERE id=?", (a1,)
+        ).fetchone()
+    assert row[0] == "evidence"
+    assert row[1] is not None
+
+
+def test_compact_auto_deprecate_transitions_to_deprecated(store: SQLiteStore):
+    a1, _ = store.store_memory_with_signal("Prefers short.", memory_type="preference")
+    a2, _ = store.store_memory_with_signal("Short is good.", memory_type="preference")
+    store.compact_atoms_to_belief(
+        eligible_ids=[a1],
+        auto_deprecate_ids=[a2],
+        belief_content="User prefers concise communication.",
+        scope="user",
+        synthesis_reason="test",
+    )
+    import sqlite3
+    with store._connect() as conn:
+        row = conn.execute(
+            "SELECT lifecycle_status FROM memory_atoms WHERE id=?", (a2,)
+        ).fetchone()
+    assert row[0] == "deprecated"
+
+
+def test_frame_historical_atom_includes_frame(store: SQLiteStore):
+    atom = {
+        "id": "x", "content": "User liked long answers.",
+        "lifecycle_status": "deprecated",
+        "confidence": 0.75, "support_weight": 3.0,
+        "peak_confidence": 0.82, "peak_support_weight": 4.0,
+        "lifecycle_updated_at": "2026-01-15T10:00:00",
+        "created_at": "2026-01-01T00:00:00",
+    }
+    framed = store._frame_historical_atom(atom)
+    assert "historical_frame" in framed
+    assert "deprecated" in framed["historical_frame"]
+    assert "0.82" in framed["historical_frame"]
+    assert "4.0 reinforcing signals" in framed["historical_frame"]
+
+
+def test_retrieve_with_history_returns_both_pools(store: SQLiteStore):
+    a1, _ = store.store_memory_with_signal("User prefers concise replies.", memory_type="preference")
+    a2, _ = store.store_memory_with_signal("User likes brief answers.", memory_type="preference")
+    # Compact a1 → evidence, keep a2 active
+    store.compact_atoms_to_belief(
+        eligible_ids=[a1],
+        auto_deprecate_ids=[],
+        belief_content="User strongly prefers concise communication.",
+        scope="user",
+        synthesis_reason="test compaction",
+    )
+    result = store.retrieve_with_history("concise responses", scope_filter="user", min_similarity=0.0)
+    assert "current" in result
+    assert "historical" in result
+    # The belief and a2 should be in current; a1 (evidence) in historical
+    current_ids = {r["id"] for r in result["current"]}
+    historical_ids = {r["id"] for r in result["historical"]}
+    assert a1 not in current_ids
+    assert a1 in historical_ids
