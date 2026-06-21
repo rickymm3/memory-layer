@@ -1,21 +1,36 @@
 #!/usr/bin/env python3
 """UserPromptSubmit hook — inject relevant memory atoms before Claude responds.
 
-Fires on every user prompt. Embeds the prompt via Ollama, searches Postgres
-for semantically similar atoms, and injects them as additionalContext so the
-LLM has memory context before generating its response.
+Fires on every user prompt. Embeds the prompt via Ollama, runs a two-stage
+retrieval (broad cosine recall → composite rerank → token-budget gate), and
+injects only atoms that clear a quality floor.
 
-Must be fast — runs synchronously before Claude sees the user message.
-Uses direct HTTP + psycopg with short timeouts; never blocks the prompt.
+Stage 1 — Recall: fetch top-20 candidates by cosine similarity (min 0.20).
+Stage 2 — Rerank: composite = (sim*0.35 + conf*0.25 + importance*0.40) × (1 + support_weight*0.5)
+Stage 3 — Gate: quality floor 0.25, then fill a hard TOKEN_BUDGET greedily.
+
+The result: only atoms that are simultaneously relevant, credible, and important
+reach the context window. Low-confidence or unreinforced atoms are suppressed
+even when semantically similar.
+
+Never blocks the prompt on failure — all exceptions exit 0 silently.
 """
 from __future__ import annotations
 
 import json
 import os
 import sys
-import urllib.error
 import urllib.request
 from pathlib import Path
+
+
+# ── Tuning constants ──────────────────────────────────────────────────────────
+RECALL_LIMIT = 20       # candidates fetched from DB (broad cosine recall)
+RECALL_MIN_SIM = 0.20   # loose SQL pre-filter — composite reranker does the real work
+QUALITY_FLOOR = 0.25    # composite score minimum; below this → never inject
+TOKEN_BUDGET = 400      # hard cap on tokens injected for current atoms
+HIST_TOKEN_BUDGET = 120 # hard cap for historical atoms
+HIST_LIMIT = 5          # candidates fetched for historical pool
 
 
 def _load_env(project_dir: str) -> None:
@@ -42,6 +57,16 @@ def _embed(prompt: str, ollama_host: str, model: str) -> list[float]:
     return body.get("embeddings", [[]])[0]
 
 
+def _composite(sim: float, conf: float, importance: float, support_weight: float) -> float:
+    """Composite relevance score combining similarity, credibility, and reinforcement."""
+    base = sim * 0.35 + conf * 0.25 + importance * 0.40
+    return base * (1.0 + float(support_weight or 0) * 0.5)
+
+
+def _tokens(text: str) -> int:
+    return max(1, len(text) // 4)
+
+
 def main() -> None:
     try:
         raw = sys.stdin.read()
@@ -66,7 +91,7 @@ def main() -> None:
     try:
         embedding = _embed(prompt[:600], ollama_host, embed_model)
     except Exception:
-        sys.exit(0)  # Ollama unavailable — don't block prompt
+        sys.exit(0)
 
     if not embedding:
         sys.exit(0)
@@ -76,56 +101,84 @@ def main() -> None:
     try:
         import psycopg
         with psycopg.connect(database_url, connect_timeout=3) as conn:
+            # Stage 1 — broad cosine recall for current atoms
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT content, memory_type, confidence, scope,
-                           1 - (embedding <=> %s::vector) AS similarity,
-                           lifecycle_status,
-                           peak_confidence
+                    SELECT content, memory_type, confidence, importance,
+                           support_weight,
+                           1 - (embedding <=> %s::vector) AS similarity
                     FROM memory_atoms
                     WHERE lifecycle_status IN ('active', 'belief')
                     ORDER BY embedding <=> %s::vector
-                    LIMIT 6
+                    LIMIT %s
                     """,
-                    (vec_str, vec_str),
+                    (vec_str, vec_str, RECALL_LIMIT),
                 )
-                rows = cur.fetchall()
+                raw_rows = cur.fetchall()
 
-            # Also grab top historical atoms for the same query
+            # Historical pool (evidence/deprecated/superseded)
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT content, memory_type, confidence, scope,
-                           1 - (embedding <=> %s::vector) AS similarity,
+                    SELECT content, memory_type, confidence,
                            lifecycle_status,
                            COALESCE(peak_confidence, confidence) AS peak_conf,
-                           lifecycle_updated_at
+                           lifecycle_updated_at,
+                           1 - (embedding <=> %s::vector) AS similarity
                     FROM memory_atoms
                     WHERE lifecycle_status IN ('evidence', 'deprecated', 'superseded')
                     ORDER BY embedding <=> %s::vector
-                    LIMIT 3
+                    LIMIT %s
                     """,
-                    (vec_str, vec_str),
+                    (vec_str, vec_str, HIST_LIMIT),
                 )
                 hist_rows = cur.fetchall()
 
     except Exception:
         sys.exit(0)
 
-    MIN_SIM = 0.35
-    current_lines: list[str] = []
-    for content, mtype, conf, scope, sim, status, peak_conf in rows:
-        if sim and float(sim) >= MIN_SIM:
-            current_lines.append(f"[{mtype}] (conf:{float(conf):.2f}) {content}")
+    # Stage 2 — composite reranking of current atoms
+    scored: list[tuple[float, str, str]] = []
+    for content, mtype, conf, importance, support_weight, sim in raw_rows:
+        if sim is None or float(sim) < RECALL_MIN_SIM:
+            continue
+        score = _composite(
+            float(sim),
+            float(conf or 0.5),
+            float(importance or 0.5),
+            float(support_weight or 0),
+        )
+        scored.append((score, content, mtype))
 
+    scored.sort(reverse=True)
+
+    # Stage 3 — quality floor + token budget gate
+    current_lines: list[str] = []
+    budget_used = 0
+    for score, content, mtype in scored:
+        if score < QUALITY_FLOOR:
+            break  # sorted DESC; everything below is also below floor
+        cost = _tokens(content)
+        if budget_used + cost > TOKEN_BUDGET:
+            break
+        budget_used += cost
+        current_lines.append(f"[{mtype}] {content}")
+
+    # Historical atoms — simpler scoring (no composite; just sim + peak_conf)
     hist_lines: list[str] = []
-    for content, mtype, conf, scope, sim, status, peak_conf, updated in hist_rows:
-        if sim and float(sim) >= MIN_SIM:
-            updated_str = str(updated)[:10] if updated else "unknown date"
-            hist_lines.append(
-                f"[{mtype}|{status} as of {updated_str}, peak conf:{float(peak_conf):.2f}] {content}"
-            )
+    hist_budget = 0
+    for content, mtype, conf, status, peak_conf, updated, sim in hist_rows:
+        if sim is None or float(sim) < RECALL_MIN_SIM:
+            continue
+        cost = _tokens(content)
+        if hist_budget + cost > HIST_TOKEN_BUDGET:
+            break
+        hist_budget += cost
+        updated_str = str(updated)[:10] if updated else "unknown"
+        hist_lines.append(
+            f"[{mtype}|{status} as of {updated_str}, peak conf:{float(peak_conf):.2f}] {content}"
+        )
 
     if not current_lines and not hist_lines:
         sys.exit(0)

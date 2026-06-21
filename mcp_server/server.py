@@ -278,6 +278,7 @@ def memory_task_context(
     model_scope: str | None = None,
     task_hint: str | None = None,
     recent_tasks: int = 5,
+    compact: bool = True,
 ) -> dict[str, Any]:
     """Return a complete task-orientation snapshot before starting work.
 
@@ -301,12 +302,17 @@ def memory_task_context(
             Triggers a semantic search and adds task_relevant_atoms (~500 ms).
         recent_tasks: Number of recent task_runs to return. Clamped 1–20.
             Default 5.
+        compact: When True (default), return atoms as '[type] (conf) content'
+            strings instead of full JSON dicts. Cuts token cost ~80%. Pass
+            compact=False only when you need metadata (id, scope, weights) for
+            write operations or debugging.
     """
     return get_task_context(
         project_scope=project_scope,
         model_scope=model_scope,
         task_hint=task_hint,
         recent_tasks=recent_tasks,
+        compact=compact,
     )
 
 

@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import psycopg
-
-from app.config import get_config
+from app.db import get_store
 
 
 def get_task_context(
@@ -12,188 +10,78 @@ def get_task_context(
     model_scope: str | None = None,
     task_hint: str | None = None,
     recent_tasks: int = 5,
+    compact: bool = True,
 ) -> dict[str, Any]:
-    """Return a complete task-orientation snapshot for a single project+model pair.
+    """Return a complete task-orientation snapshot for a project+model pair.
 
-    Combines three complementary views in one round-trip:
-    1. **project_context** — high-importance, high-confidence atoms for the
-       project scope; same content as memory_project_context but with a lower
-       default threshold so more lessons surface.
-    2. **model_lessons** — all active atoms from *model_scope* (weaknesses,
-       prompt adaptations, reliability observations), ordered by importance.
-    3. **recent_task_runs** — the last N task_run records for this project,
-       newest first; shows what tasks were completed and their outcomes.
-
-    If *task_hint* is given, a fourth section is returned:
-    4. **task_relevant_atoms** — atoms from project_scope that are semantically
-       related to the task hint. Requires an embedding call (adds ~500 ms).
-
-    Call this as the first tool when starting any non-trivial task. One call
-    replaces: memory_project_context + memory_recent (model scope) +
-    memory_list_task_runs.
+    Combines in one call:
+    1. project_context  — high-importance, high-confidence atoms for the project scope.
+    2. model_lessons    — all active atoms from model_scope (weaknesses, adaptations).
+    3. recent_task_runs — last N task_run records for this project.
+    4. task_relevant_atoms — semantic matches for task_hint (if provided, ~500 ms).
 
     Args:
-        project_scope: Required. Project scope (e.g. 'project:memory-layer').
-        model_scope: Optional model scope (e.g. 'model:qwen3-8b'). When
-            provided, all active atoms from this scope are returned as
-            model_lessons so the agent sees known weaknesses and prompt
-            adaptations before planning.
-        task_hint: Optional short description of the task about to be
-            performed. When provided, triggers a semantic search over
-            project_scope atoms and returns the top 5 most relevant results
-            as task_relevant_atoms.
-        recent_tasks: Number of recent task_run records to return. Clamped
-            to 1–20. Default 5.
+        project_scope: Required. E.g. 'project:memory-layer'.
+        model_scope: Optional model scope (e.g. 'model:claude-sonnet-4-6').
+        task_hint: Optional short description for semantic search.
+        recent_tasks: Number of recent task_runs to return. Clamped 1–20. Default 5.
+        compact: When True (default), return atoms as compact strings
+            '[type] (conf) content' instead of full JSON dicts. Cuts token
+            cost by ~80% for session-start injection.
     """
     clamped_tasks = max(1, min(int(recent_tasks), 20))
-    config = get_config()
+    store = get_store()
 
-    project_atoms: list[dict[str, Any]] = []
-    model_lessons: list[dict[str, Any]] = []
-    task_runs: list[dict[str, Any]] = []
+    # 1. project_context — reduced from 15 to 8; session-start must be lean
+    project_atoms = store.project_context_atoms(
+        scope=project_scope, limit=8, min_importance=0.6, min_confidence=0.65
+    )
 
-    with psycopg.connect(config.database_url) as conn:
-        # --- 1. project_context -------------------------------------------------
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, content, context_summary, memory_type, scope,
-                       confidence, importance, created_at, lifecycle_status,
-                       disagreement_flag
-                FROM memory_atoms
-                WHERE scope = %s
-                  AND importance >= 0.5
-                  AND confidence >= 0.6
-                  AND lifecycle_status = 'active'
-                ORDER BY importance DESC, confidence DESC, created_at DESC
-                LIMIT 15;
-                """,
-                (project_scope,),
-            )
-            for r in cur.fetchall():
-                project_atoms.append(
-                    {
-                        "id": str(r[0]),
-                        "content": r[1],
-                        "context_summary": r[2],
-                        "memory_type": r[3],
-                        "scope": r[4],
-                        "confidence": round(float(r[5]), 3),
-                        "importance": round(float(r[6]), 3),
-                        "created_at": r[7].isoformat() if r[7] else None,
-                        "lifecycle_status": r[8],
-                        "disagreement_flag": bool(r[9]),
-                    }
-                )
+    # 2. model_lessons — reduced from 20 to 5; model-specific atoms rarely numerous
+    model_lessons = store.get_active_atoms_by_scope(scope=model_scope, limit=5) if model_scope else []
 
-        # --- 2. model_lessons ---------------------------------------------------
-        if model_scope is not None:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT id, content, context_summary, memory_type, scope,
-                           confidence, importance, created_at, disagreement_flag
-                    FROM memory_atoms
-                    WHERE scope = %s
-                      AND lifecycle_status = 'active'
-                    ORDER BY importance DESC, confidence DESC, created_at DESC
-                    LIMIT 20;
-                    """,
-                    (model_scope,),
-                )
-                for r in cur.fetchall():
-                    model_lessons.append(
-                        {
-                            "id": str(r[0]),
-                            "content": r[1],
-                            "context_summary": r[2],
-                            "memory_type": r[3],
-                            "scope": r[4],
-                            "confidence": round(float(r[5]), 3),
-                            "importance": round(float(r[6]), 3),
-                            "created_at": r[7].isoformat() if r[7] else None,
-                            "disagreement_flag": bool(r[8]),
-                        }
-                    )
+    # 3. recent_task_runs
+    task_runs = store.list_task_runs_db(scope=project_scope, limit=clamped_tasks)
 
-        # --- 3. recent_task_runs ------------------------------------------------
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, scope, task_description, model_used,
-                       outcome, lessons_stored, created_at
-                FROM task_runs
-                WHERE scope = %s
-                ORDER BY created_at DESC
-                LIMIT %s;
-                """,
-                (project_scope, clamped_tasks),
-            )
-            for r in cur.fetchall():
-                task_runs.append(
-                    {
-                        "id": str(r[0]),
-                        "scope": r[1],
-                        "task_description": r[2],
-                        "model_used": r[3],
-                        "outcome": r[4],
-                        "lessons_stored": r[5],
-                        "created_at": r[6].isoformat() if r[6] else None,
-                    }
-                )
-
-    # --- 4. task_relevant_atoms (semantic search) --------------------------------
-    task_relevant: list[dict[str, Any]] = []
+    # 4. task_relevant_atoms (semantic search)
+    task_relevant: list[Any] = []
     if task_hint is not None:
-        from app.llm_provider import get_llm_client
-
-        embedding = get_llm_client().embed_text(task_hint)
-        embedding_literal = "[" + ",".join(str(v) for v in embedding) + "]"
-
-        with psycopg.connect(config.database_url) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT id, content, context_summary, memory_type, scope,
-                           confidence, importance,
-                           1 - (embedding <=> %s::vector) AS similarity,
-                           disagreement_flag
-                    FROM memory_atoms
-                    WHERE scope = %s
-                      AND lifecycle_status = 'active'
-                      AND 1 - (embedding <=> %s::vector) >= 0.45
-                    ORDER BY embedding <=> %s::vector
-                    LIMIT 5;
-                    """,
-                    (embedding_literal, project_scope,
-                     embedding_literal, embedding_literal),
-                )
-                for r in cur.fetchall():
-                    task_relevant.append(
-                        {
-                            "id": str(r[0]),
-                            "content": r[1],
-                            "context_summary": r[2],
-                            "memory_type": r[3],
-                            "scope": r[4],
-                            "confidence": round(float(r[5]), 3),
-                            "importance": round(float(r[6]), 3),
-                            "similarity": round(float(r[7]), 3),
-                            "disagreement_flag": bool(r[8]),
-                        }
-                    )
+        task_relevant = store.retrieve_memories(
+            query=task_hint,
+            limit=5,
+            min_similarity=0.45,
+            scope_filter=project_scope,
+        )
+        for a in task_relevant:
+            if "disagreement_flag" not in a:
+                a["disagreement_flag"] = a.get("disagreement_score", 0.0) >= 0.5
 
     outcome_counts: dict[str, int] = {}
     for tr in task_runs:
         outcome_counts[tr["outcome"]] = outcome_counts.get(tr["outcome"], 0) + 1
 
+    def _fmt(atoms: list[dict[str, Any]]) -> list[Any]:
+        if not compact:
+            return atoms
+        result = []
+        for a in atoms:
+            flag = " ⚠ conflict" if a.get("disagreement_flag") else ""
+            result.append(f"[{a['memory_type']}] ({float(a.get('confidence', 0.5)):.2f}) {a['content']}{flag}")
+        return result
+
+    def _fmt_runs(runs: list[dict[str, Any]]) -> list[Any]:
+        if not compact:
+            return runs
+        return [f"[{r['outcome']}] {r.get('task_description', '')[:80]}" for r in runs]
+
     return {
         "project_scope": project_scope,
         "model_scope": model_scope,
-        "project_context": project_atoms,
-        "model_lessons": model_lessons,
-        "recent_task_runs": task_runs,
-        "task_relevant_atoms": task_relevant,
+        "compact": compact,
+        "project_context": _fmt(project_atoms),
+        "model_lessons": _fmt(model_lessons),
+        "recent_task_runs": _fmt_runs(task_runs),
+        "task_relevant_atoms": _fmt(task_relevant),
         "summary": {
             "project_atoms": len(project_atoms),
             "model_lessons": len(model_lessons),
