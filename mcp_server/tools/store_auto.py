@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from app.commit_pipeline import MemoryCommitPipeline
+from app.db import get_store
+from app.write_quality import score_write_quality
 
 
 def store_memory_auto(
@@ -35,12 +37,38 @@ def store_memory_auto(
         reconciliation_reason: Reconciler's reason string, if any.
         matched_memory_ids: Related existing atom UUIDs from reconciliation.
     """
+    # ── Write quality pre-gate ────────────────────────────────────────────────
+    quality = score_write_quality(content, memory_type=memory_type, stated_importance=importance)
+    if quality.decision == "reject":
+        return {
+            "stored": False,
+            "write_action": "rejected_by_quality_gate",
+            "decision": "rejected",
+            "memory_atom_id": None,
+            "memory_signal_id": None,
+            "proposal_id": None,
+            "content": content,
+            "memory_type": memory_type,
+            "scope": scope,
+            "rejection_reason": f"write quality too low ({quality.quality_score:.2f}): "
+                                 + "; ".join(quality.signals),
+            "critic_notes": [],
+            "quality_score": quality.quality_score,
+            "quality_signals": quality.signals,
+        }
+    # Downgrade: cap importance at quality_score if scorer recommends it
+    effective_importance = (
+        quality.adjusted_importance
+        if quality.adjusted_importance is not None
+        else importance
+    )
+
     candidate = {
         "content": content,
         "memory_type": memory_type,
         "scope": scope,
         "confidence": confidence,
-        "importance": importance,
+        "importance": effective_importance,
         "context_summary": context_summary or "",
         "should_store": True,
     }
@@ -65,85 +93,6 @@ def store_memory_auto(
         "scope": d.get("scope"),
         "rejection_reason": d.get("rejection_reason"),
         "critic_notes": d.get("critic_notes", []),
-    }
-    """Store a low-risk candidate via the auto-store path and return a write report.
-
-    Only valid for relationship values 'new' and 'refinement'. Rejects
-    'conflict' and 'opinion_change' — those must go through
-    memory_propose_signal. Runs an exact-match guard before writing.
-    Writes memory_atom + linked memory_signal in a single transaction.
-    Never stores silently — always returns a structured write report.
-
-    Args:
-        content: Full canonical sentence of the candidate to store.
-        memory_type: Memory type (fact, decision, instruction, etc.).
-        relationship: Reconciler output. Must be 'new' or 'refinement'.
-        context_summary: Compact prompt-friendly summary. Defaults to content.
-        scope: Optional scope string (e.g. 'project:memory-layer').
-        confidence: Confidence float 0.0–1.0. Clamped. Default 0.8.
-        importance: Importance float 0.0–1.0. Clamped. Default 0.5.
-        reconciliation_reason: Reconciler's reason string, if any.
-        matched_memory_ids: Related existing atom UUIDs from reconciliation.
-    """
-    relationship = relationship.strip().lower()
-
-    if relationship in _REJECTED_RELATIONSHIPS:
-        return {
-            "stored": False,
-            "error": (
-                f"relationship '{relationship}' requires user confirmation. "
-                "Use memory_propose_signal instead."
-            ),
-        }
-
-    if relationship not in _AUTO_STORABLE_RELATIONSHIPS:
-        return {
-            "stored": False,
-            "error": (
-                f"unknown relationship '{relationship}'. "
-                "Expected 'new' or 'refinement'."
-            ),
-        }
-
-    clamped_confidence = max(0.0, min(float(confidence), 1.0))
-    clamped_importance = max(0.0, min(float(importance), 1.0))
-    summary = (context_summary or "").strip() or content
-
-    store = MemoryStore()
-
-    exact_match = store.find_exact_content_match(content)
-    if exact_match:
-        return {
-            "stored": False,
-            "error": "exact duplicate",
-            "existing_memory_atom_id": str(exact_match["id"]),
-        }
-
-    signal_metadata: dict | None = None
-    if matched_memory_ids:
-        signal_metadata = {"matched_memory_ids": matched_memory_ids}
-
-    atom_id, signal_id = store.store_memory_with_signal(
-        content=content,
-        context_summary=summary,
-        memory_type=memory_type,
-        scope=scope,
-        confidence=clamped_confidence,
-        importance=clamped_importance,
-        relationship=relationship,
-        reconciliation_reason=reconciliation_reason,
-        signal_metadata=signal_metadata,
-        task_run_id=task_run_id,
-    )
-
-    return {
-        "stored": True,
-        "memory_atom_id": atom_id,
-        "memory_signal_id": signal_id,
-        "content": content,
-        "memory_type": memory_type,
-        "scope": scope,
-        "relationship": relationship,
-        "signal_created": True,
-        "auto_stored": True,
+        "quality_score": quality.quality_score,
+        "quality_signals": quality.signals,
     }
