@@ -1387,6 +1387,17 @@ def discussion_helpful(disc_id):
                         """,
                         (str(disc_id),),
                     )
+                    # Increment usefulness_score for all contributors — prior outcomes tracking
+                    cur.execute(
+                        """
+                        UPDATE users u
+                        SET usefulness_score = usefulness_score + 0.1
+                        FROM discussion_atoms da
+                        WHERE da.discussion_id = %s
+                          AND da.source_user_id = u.username;
+                        """,
+                        (str(disc_id),),
+                    )
             conn.commit()
         flash("Marked as helpful — the knowledge was confirmed.", "success")
     except Exception as exc:

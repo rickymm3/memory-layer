@@ -53,14 +53,17 @@ def synthesise_discussion(disc_id: str, db_url: str | None = None) -> str | None
                 if current_status in ("answered", "validated"):
                     return None
 
-                # Fetch all reaction atoms — most novel first
+                # Fetch reaction atoms with confidence and disagreement for weighting
                 cur.execute(
                     """
-                    SELECT ma.content, ma.memory_type, ma.confidence
+                    SELECT ma.content, ma.memory_type, ma.confidence,
+                           ma.disagreement_score, ma.support_weight
                     FROM discussion_atoms da
                     JOIN memory_atoms ma ON ma.id = da.atom_id
                     WHERE da.discussion_id = %s
-                    ORDER BY da.novelty_score DESC, da.added_at ASC
+                    ORDER BY da.novelty_score DESC,
+                             ma.confidence DESC,
+                             da.added_at ASC
                     LIMIT %s;
                     """,
                     (disc_id, _MAX_ATOMS_FOR_SYNTHESIS),
@@ -141,20 +144,45 @@ def synthesise_discussion(disc_id: str, db_url: str | None = None) -> str | None
 def _generate_synthesis(title: str, atoms: list[tuple]) -> str | None:
     """Call the LLM to synthesise atom contents into a single paragraph.
 
+    Atoms are labeled by weight tier (high confidence, contested, supporting)
+    so the LLM can weight them appropriately in the synthesis.
     Falls back to mechanical concatenation if LLM is unavailable.
     """
-    atom_texts = [row[0] for row in atoms if row[0]]
-    n = len(atom_texts)
-    if not atom_texts:
+    if not atoms:
+        return None
+
+    # Label each atom by its confidence + disagreement tier
+    labeled: list[str] = []
+    for row in atoms:
+        content, _mtype, confidence, disagreement, support = row
+        if not content:
+            continue
+        conf = float(confidence or 0.8)
+        disc = float(disagreement or 0.0)
+        supp = float(support or 0.0)
+        if disc > 0.5:
+            label = "Contested claim"
+        elif conf >= 0.85 and supp >= 1.0:
+            label = "High-confidence claim"
+        elif supp >= 2.0:
+            label = "Widely supported claim"
+        else:
+            label = "Supporting perspective"
+        labeled.append(f"[{label}] {content}")
+
+    n = len(labeled)
+    if not labeled:
         return None
 
     prompt = (
         f"Topic: {title}\n\n"
-        f"The following {n} perspective(s) were contributed by different people:\n\n"
-        + "\n\n".join(f"{i+1}. {t}" for i, t in enumerate(atom_texts))
+        f"The following {n} perspective(s) were contributed by different people. "
+        "Each is labeled by its confidence weight:\n\n"
+        + "\n\n".join(f"{i+1}. {t}" for i, t in enumerate(labeled))
         + "\n\nWrite a single paragraph synthesis starting with "
         f'"Based on {n} perspective{"s" if n != 1 else ""}:". '
-        "Capture the main consensus, notable disagreements, and specific insights. "
+        "High-confidence and widely-supported claims should anchor the synthesis. "
+        "Contested claims should be presented as open questions. "
         "Under 120 words. No bullet points. Plain prose only."
     )
 
@@ -165,14 +193,14 @@ def _generate_synthesis(title: str, atoms: list[tuple]) -> str | None:
             prompt,
             system="You synthesise multiple viewpoints into a single clear paragraph. Be concise and neutral.",
         )
-        return result.strip() if result else _mechanical_synthesis(atom_texts)
+        return result.strip() if result else _mechanical_synthesis(labeled)
     except Exception:
-        return _mechanical_synthesis(atom_texts)
+        return _mechanical_synthesis(labeled)
 
 
-def _mechanical_synthesis(atom_texts: list[str]) -> str:
-    """Fallback when LLM is unavailable — joins top 3 perspectives mechanically."""
-    n = len(atom_texts)
-    parts = [t[:200] for t in atom_texts[:3]]
+def _mechanical_synthesis(labeled: list[str]) -> str:
+    """Fallback when LLM is unavailable — joins top 3 labeled perspectives mechanically."""
+    n = len(labeled)
+    parts = [t[:200] for t in labeled[:3]]
     intro = f"Based on {n} perspective{'s' if n != 1 else ''}: "
     return intro + " Additionally, ".join(parts) + "."
