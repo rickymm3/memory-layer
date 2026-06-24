@@ -23,7 +23,12 @@
       </div>
     </div>
 
-    {% if disc.thread_status == 'answered' %}
+    {% if disc.thread_status == 'reopened' %}
+    <div style="background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.25);border-radius:var(--radius);padding:.9rem 1.1rem;margin-bottom:1.25rem">
+      <div style="font-size:.87rem;font-weight:600;color:var(--amber)">New information arrived</div>
+      <div style="font-size:.8rem;color:var(--muted);margin-top:.15rem">Someone added a new perspective after this was answered. It's being re-evaluated.</div>
+    </div>
+    {% elif disc.thread_status == 'answered' %}
     <div style="background:rgba(22,163,74,.07);border:1px solid rgba(22,163,74,.25);border-radius:var(--radius);padding:.9rem 1.1rem;margin-bottom:1.25rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
       <div>
         <div style="font-size:.87rem;font-weight:600;color:#4ade80">This conversation has a new answer</div>

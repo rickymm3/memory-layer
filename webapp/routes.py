@@ -1225,17 +1225,37 @@ def discussion_react(disc_id):
                         """,
                         (str(disc_id), atom_id, current_user.username),
                     )
-                    # Update discussion activity and contributor count
+                    # Update discussion activity and contributor count.
+                    # If already answered/validated, reopen — new evidence arrived.
                     cur.execute(
                         """
                         UPDATE discussions
                         SET last_activity_at = now(),
                             contributor_count = contributor_count + 1,
-                            atom_count = atom_count + 1
-                        WHERE id = %s;
+                            atom_count = atom_count + 1,
+                            thread_status = CASE
+                                WHEN thread_status IN ('answered', 'validated') THEN 'reopened'
+                                ELSE thread_status
+                            END
+                        WHERE id = %s
+                        RETURNING thread_status;
                         """,
                         (str(disc_id),),
                     )
+                    new_status = (cur.fetchone() or [None])[0]
+                    # Reopened → fire an immediate notification for the creator
+                    if new_status == "reopened":
+                        cur.execute(
+                            """
+                            INSERT INTO user_notifications
+                                (user_id, discussion_id, new_atom_count, notification_type)
+                            SELECT d.created_by_user_id, d.id, 1, 'reopened'
+                            FROM discussions d
+                            WHERE d.id = %s
+                              AND d.created_by_user_id IS NOT NULL;
+                            """,
+                            (str(disc_id),),
+                        )
                     # Queue notification for the discussion creator (not the reactor)
                     cur.execute(
                         """
