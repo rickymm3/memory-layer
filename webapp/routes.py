@@ -1340,16 +1340,19 @@ def discussion_react(disc_id):
                             """,
                             (str(disc_id),),
                         )
-                    # Queue notification for the discussion creator (not the reactor)
+                    # Queue notification for the discussion creator (not the reactor).
+                    # Batched: upsert increments new_atom_count so multiple reactions
+                    # produce one notification row, not one per reaction.
                     cur.execute(
                         """
-                        INSERT INTO user_notifications
-                            (user_id, discussion_id, new_atom_count)
+                        INSERT INTO user_notifications (user_id, discussion_id, new_atom_count)
                         SELECT d.created_by_user_id, d.id, 1
                         FROM discussions d
                         WHERE d.id = %s
                           AND d.created_by_user_id IS NOT NULL
-                          AND d.created_by_user_id != (SELECT id FROM users WHERE username = %s);
+                          AND d.created_by_user_id != (SELECT id FROM users WHERE username = %s)
+                        ON CONFLICT (user_id, discussion_id) WHERE read = false
+                        DO UPDATE SET new_atom_count = user_notifications.new_atom_count + 1;
                         """,
                         (str(disc_id), current_user.username),
                     )
