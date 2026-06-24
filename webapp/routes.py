@@ -1269,6 +1269,48 @@ def discussion_react(disc_id):
     return redirect(url_for("webapp.discussion_detail", disc_id=disc_id))
 
 
+@site_bp.route("/discussion/<uuid:disc_id>/helpful", methods=["POST"])
+@login_required
+def discussion_helpful(disc_id):
+    """Mark an answered discussion as helpful — advances status to Validated.
+
+    Increases confidence on the linked synthesis atom. Only valid when
+    thread_status is 'answered'. Creator or any contributor can mark it.
+    """
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                # Only advance if currently answered
+                cur.execute(
+                    """
+                    UPDATE discussions
+                    SET thread_status = 'validated', last_activity_at = now()
+                    WHERE id = %s AND thread_status = 'answered'
+                    RETURNING id;
+                    """,
+                    (str(disc_id),),
+                )
+                updated = cur.fetchone()
+                if updated:
+                    # Boost confidence on all atoms linked to this discussion
+                    cur.execute(
+                        """
+                        UPDATE memory_atoms ma
+                        SET confidence = LEAST(confidence + 0.08, 1.0),
+                            support_weight = support_weight + 1
+                        FROM discussion_atoms da
+                        WHERE da.discussion_id = %s AND da.atom_id = ma.id;
+                        """,
+                        (str(disc_id),),
+                    )
+            conn.commit()
+        flash("Marked as helpful — the knowledge was confirmed.", "success")
+    except Exception as exc:
+        _logger.warning("discussion_helpful: %s", exc)
+        flash("Could not record your rating.", "error")
+    return redirect(url_for("webapp.discussion_detail", disc_id=disc_id))
+
+
 @site_bp.route("/notifications")
 @login_required
 def notifications():

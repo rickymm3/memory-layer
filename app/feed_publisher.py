@@ -53,6 +53,41 @@ def _extract_tags(user_msg: str, answer: str) -> list[str]:
     return ranked[:5]
 
 
+def _craft_post_body(user_msg: str, answer: str, tags: list[str]) -> str:
+    """Ask the LLM to write an engaging discussion opener from the conversation.
+
+    The post should read as an interesting stand-alone question or observation —
+    not a raw AI answer, not a user message verbatim. Falls back to a cleaned
+    excerpt if the LLM is unavailable.
+    """
+    prompt = (
+        f"A person asked: {user_msg.strip()[:400]}\n\n"
+        f"The AI's best answer was: {answer.strip()[:600]}\n\n"
+        f"Topic tags: {', '.join(tags)}\n\n"
+        "Write a short, engaging discussion post (2-3 sentences max) that:\n"
+        "- Frames the topic as an interesting open question worth exploring\n"
+        "- Does NOT start with 'I' or 'The AI'\n"
+        "- Sounds like a curious person sharing something they're thinking about\n"
+        "- Ends in a way that invites a response\n"
+        "Return only the post body — no title, no label, no explanation."
+    )
+    try:
+        from app.llm_provider import get_chat_client
+        llm = get_chat_client()
+        result = llm.generate_response(
+            prompt,
+            system="You write engaging, human-sounding discussion starters. Be concise and curious.",
+        )
+        if result and len(result.strip()) > 20:
+            return result.strip()[:600]
+    except Exception:
+        pass
+    # Fallback: first 2 sentences of answer, cleaned up
+    cleaned = answer.strip()
+    sentences = re.split(r"(?<=[.!?])\s+", cleaned)
+    return " ".join(sentences[:2])[:500] if sentences else cleaned[:500]
+
+
 def _worth_surfacing(atom_ids: list[str], db_url: str) -> bool:
     """Return True if any atom clears the novelty gate.
 
@@ -101,8 +136,7 @@ def publish_to_feed(
 
     title = _make_title(user_msg)
     tags = _extract_tags(user_msg, answer)
-    # Summary shown in explore feed — a neutral paraphrase, not the raw turn
-    summary = answer[:500].strip() if answer else user_msg[:500].strip()
+    summary = _craft_post_body(user_msg, answer, tags)
 
     try:
         import psycopg

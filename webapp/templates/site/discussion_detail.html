@@ -23,6 +23,24 @@
       </div>
     </div>
 
+    {% if disc.thread_status == 'answered' %}
+    <div style="background:rgba(22,163,74,.07);border:1px solid rgba(22,163,74,.25);border-radius:var(--radius);padding:.9rem 1.1rem;margin-bottom:1.25rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+      <div>
+        <div style="font-size:.87rem;font-weight:600;color:#4ade80">This conversation has a new answer</div>
+        <div style="font-size:.8rem;color:var(--muted);margin-top:.15rem">Perspectives from the network were synthesised into a refined belief.</div>
+      </div>
+      <form method="post" action="{{ url_for('webapp.discussion_helpful', disc_id=disc.id) }}" style="margin:0;flex-shrink:0">
+        <button type="submit" class="btn btn-ghost btn-sm" style="border-color:rgba(22,163,74,.4);color:#4ade80">
+          Was this helpful? ✓
+        </button>
+      </form>
+    </div>
+    {% elif disc.thread_status == 'validated' %}
+    <div style="background:rgba(21,128,61,.07);border:1px solid rgba(21,128,61,.25);border-radius:var(--radius);padding:.75rem 1.1rem;margin-bottom:1.25rem;font-size:.84rem;color:#86efac">
+      ✓ Marked as helpful — confidence confirmed.
+    </div>
+    {% endif %}
+
     <div style="border-top:1px solid var(--border);padding-top:1rem">
       {% if contributions %}
         {% for c in contributions %}
