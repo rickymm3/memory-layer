@@ -1,100 +1,98 @@
 ---
 description: >
-  Synapse autonomous development loop. On every iteration: reads the primer,
-  audits the codebase against the loop diagram, picks the highest-priority
-  open node, implements it, tests it, commits it, and updates BACKLOG.md.
-  Does not wait for user direction.
+  Synapse autonomous build loop. Goal: complete the project by closing every
+  open node in BACKLOG.md. Runs continuously — each iteration implements one
+  backlog item, commits it, and immediately fires the next iteration.
+  Does not wait for user direction. Does not stop until the backlog is empty.
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, mcp__memoryLayer__memory_store_auto, mcp__memoryLayer__memory_search
 ---
 
-You are running autonomously on behalf of the user. Do not wait for direction.
-Your job is to advance the Synapse project by closing open loop nodes.
+Your goal is to complete the Synapse project.
+
+Read BACKLOG.md. Take the top unblocked item. Build it. Test it. Commit it.
+Mark it done. Fire the next iteration immediately. Repeat until empty.
 
 ---
 
-## Step 1 — Load the operating framework
+## Step 1 — Load the Synapse loop framework
 
-Read this file in full before doing anything else:
+Read this file completely before touching any code:
 /home/ricky/memory-layer/.claude/commands/synapse-loop.md
 
-This defines the architecture you are implementing. Every decision must trace
-to a node in the core loop diagram.
+This is your architecture spec. Every implementation decision must trace to a
+node in the core loop diagram. If it doesn't, skip it and take the next item.
 
 ---
 
-## Step 2 — Load the backlog
+## Step 2 — Read the backlog
 
-Read this file:
-/home/ricky/memory-layer/BACKLOG.md
+Read: /home/ricky/memory-layer/BACKLOG.md
 
-It contains the ranked list of open loop nodes. The top item is what you work
-on this iteration unless it is blocked — in which case take the next unblocked
-item and note the blocker on the blocked one.
-
----
-
-## Step 3 — Audit before acting
-
-Before touching code, verify:
-1. Is the top backlog item already partially implemented? Check the relevant
-   files. Do not duplicate work.
-2. Does the item connect to a named node in the core loop? If not, skip it
-   and note the mismatch in BACKLOG.md.
-3. Will implementing it preserve write integrity on all three surfaces?
+Take the first item under **Active** that is not marked blocked.
+If all items are blocked, write why in BACKLOG.md and stop the loop.
+If the backlog is empty, the project is complete — stop the loop.
 
 ---
 
-## Step 4 — Implement
+## Step 3 — Audit before coding
 
-Do the actual work. Write the code, the migration, the template, the test.
-Do not describe what could be done — do it.
+Before writing a single line:
+1. Check if the item is already partially implemented. Read the relevant files.
+   Do not duplicate work that exists. Continue from where it stopped.
+2. Confirm it connects to a named node in the synapse-loop diagram.
+3. Confirm write integrity on all three surfaces is preserved.
+4. Size the work. If it's more than ~200 lines across files, scope down to the
+   smallest slice that is still a working, testable unit. Do the slice. Leave
+   the rest in BACKLOG with a "partial — continued from commit X" note.
 
-Target: one complete, working, tested unit of functionality per iteration.
-A unit is the smallest thing that closes a node in the loop — a working route,
-a passing test suite, a wired UI state change.
+---
 
-If the item is too large for one iteration: implement the first logical slice,
-commit it, update BACKLOG.md to reflect what was done and what remains.
+## Step 4 — Build
+
+Write the code. Do not describe it. Do not plan it out in prose.
+Write the migration, the route, the template, the test — whatever the item needs.
+
+One working unit per iteration. A working unit means:
+- The feature does what the backlog item says it does
+- It is tested (existing tests pass + new test if the item adds behavior)
+- It has no syntax errors (run the file if unsure)
 
 ---
 
 ## Step 5 — Test
 
-Run the full test suite before committing:
-```
+```bash
 source .venv/bin/activate && python -m pytest tests/ -q --tb=short
 ```
 
-If tests fail: fix them. Do not commit broken code.
-If the item requires a new test: write it.
+All tests must pass before committing. If they fail, fix them — do not skip.
+If a new test is needed, write it in `tests/`.
 
 ---
 
 ## Step 6 — Commit
 
-Commit with a message that names the loop node that was closed.
-Format: `feat: <what was built> — closes [Node Name] loop node`
+```
+feat: <what was built> — closes [Loop Node Name] node
+```
+
+Include the loop node name in the commit message so the history is traceable.
 
 ---
 
 ## Step 7 — Update BACKLOG.md
 
-Mark the completed item as done with the commit hash.
-If the item was partially completed, update its description to reflect
-what remains. Add any new open nodes discovered during implementation.
+Mark the completed item done with: `— commit <hash> (date)`
+If partial: update the item description with what remains, leave it in Active.
+Add any newly discovered open nodes at the bottom of Active.
 
 ---
 
-## Step 8 — Session-close check (from the primer)
-
-Ask: "Did this iteration close a gap or open one?"
-If it opened one — name it and add it to BACKLOG.md before scheduling.
-
----
-
-## Step 9 — Schedule next iteration
+## Step 8 — Fire next iteration immediately
 
 Use ScheduleWakeup:
 - prompt: `<<autonomous-loop-dynamic>>`
-- delaySeconds: 1800
-- reason: "Synapse loop — completed [what you just built], next: [top of backlog]"
+- delaySeconds: 60
+- reason: "Synapse build loop — completed [item just done], next: [next backlog item]"
+
+The loop is the work. Keep it running.
