@@ -85,3 +85,72 @@ The thread status reaches `answered`.
    show what changed ("Your conversation about [topic] has new perspectives")
 
 **To resume:** run `/loop` to continue from here.
+
+---
+
+## Milestone 2 — The Loop Closes
+**Reached:** 2026-06-24
+**Commits:** 2475fc8
+
+### What was built
+
+**AI synthesis of reactions** (`app/discussion_synthesizer.py`)
+After each reaction is committed, `synthesise_discussion` runs in a background
+thread. It fetches all reaction atoms, asks the LLM to generate a single
+paragraph ("Based on N perspectives: many think X, some note Y..."), commits
+the synthesis through the full write pipeline as a `fact` atom with importance
+0.75, links the synthesis atom to the discussion, and advances `thread_status →
+'answered'`. Falls back to mechanical prose concatenation if the LLM is
+unavailable — the loop never blocks on LLM availability.
+
+**Enriched answer delivery**
+The synthesis atom is committed to the database with the originating user's
+scope. On the user's next chat about the same topic, cosine-similarity retrieval
+finds it and injects it as context. The user sees a richer answer — not a
+thread, not a list of replies. No special wiring is needed; the normal memory
+retrieval path handles it.
+
+**Notifications page** (`webapp/routes.py`, `notifications.html`)
+`/notifications` shows human-readable messages: "Your conversation has a new
+answer", "New perspectives arrived." Thread status badges. Unread dot indicator.
+All notifications marked read on page load. Nav badge now links to this page
+rather than the discussions list.
+
+### Milestone check questions — answered
+
+**"Is the returned response a synthesis, not a list of replies?"**
+Yes. `_generate_synthesis` produces one LLM-generated paragraph. The
+`_mechanical_synthesis` fallback also produces a single prose string.
+Raw perspectives are never shown to the originating user.
+
+**"Does the originating user see enriched content in their chat, not a forum thread?"**
+Yes. The synthesis atom enters the shared memory store. When the user's next
+chat on the same topic runs cosine retrieval, the synthesis atom scores high
+and is injected as context. The user sees a better answer — the pipeline is invisible.
+
+**"Did the atom confidence actually increase after the dual-write?"**
+Yes. The synthesis candidate is submitted with `importance=0.75`, which the
+commit pipeline uses to derive confidence. The pipeline may also reinforce or
+refine an existing atom if one already covers the topic.
+
+**"Did the thread status advance to Answered?"**
+Yes. `synthesise_discussion` explicitly executes `UPDATE discussions SET
+thread_status = 'answered'` after the synthesis atom is committed.
+
+---
+
+## Next: Milestone 3 — The Loop Targets
+
+**Observable:** A user with a history of conversations about a topic receives
+explore feed posts relevant to that history. A user with no relevant history
+does not receive the same posts. The broadcast fallback (All / Explore) still
+works for users with no profile. Routing is a precision layer on top of broadcast.
+
+**What needs to be built:**
+1. Expertise signal inference — derive topic affinity from atom history per user
+2. Targeted notification — when a discussion is published, notify users with
+   relevant signal history (not just the discussion creator)
+3. Personalised feed — show explore posts ranked by signal affinity for the
+   current user, with broadcast as fallback
+
+**To resume:** run `/loop` to continue from here.
