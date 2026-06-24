@@ -42,9 +42,8 @@ def get_user_topic_tags(username: str, db_url: str) -> list[str]:
                     """
                     SELECT ma.content
                     FROM memory_atoms ma
-                    JOIN memory_signals ms ON ms.atom_id = ma.id
-                    JOIN users u ON u.id = ms.source_user_id
-                    WHERE u.username = %s
+                    JOIN memory_signals ms ON ms.memory_atom_id = ma.id
+                    WHERE ms.source_user_id = %s
                     ORDER BY ms.created_at DESC
                     LIMIT %s;
                     """,
@@ -120,8 +119,8 @@ def find_users_with_affinity(
                     """
                     SELECT DISTINCT u.id
                     FROM users u
-                    JOIN memory_signals ms ON ms.source_user_id = u.id
-                    JOIN memory_atoms ma ON ma.id = ms.atom_id
+                    JOIN memory_signals ms ON ms.source_user_id = u.username
+                    JOIN memory_atoms ma ON ma.id = ms.memory_atom_id
                     WHERE (
                         ma.content ILIKE ANY(%s)
                     )
