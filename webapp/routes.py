@@ -935,6 +935,7 @@ def explore():
         pass
 
     # Re-rank by topic affinity if the user has history; broadcast fallback if not
+    user_tags: list[str] = []
     if current_user.is_authenticated and rows:
         try:
             from app.topic_affinity import get_user_topic_tags, rank_discussions_by_affinity
@@ -946,7 +947,7 @@ def explore():
         except Exception:
             pass  # silently fall back to recency order
 
-    return render_template("site/explore.html", discussions=rows)
+    return render_template("site/explore.html", discussions=rows, user_tags=user_tags)
 
 
 @site_bp.route("/categories")

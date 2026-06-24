@@ -7,6 +7,11 @@
     <div class="page-header">
       <h1>Explore</h1>
       <p>Conversations from across the network. Browse what interests you and add your perspective — it shapes how everyone's AI answers this topic.</p>
+      {% if user_tags %}
+      <div style="font-size:.78rem;color:var(--muted);margin-top:.5rem">
+        Ranked by your interests: {% for t in user_tags[:6] %}<span class="tag">{{ t }}</span>{% endfor %}
+      </div>
+      {% endif %}
     </div>
 
     {% if discussions %}
@@ -41,6 +46,9 @@
               <span class="disc-meta-sep">{{ d.atom_count }} idea{{ 's' if d.atom_count != 1 }}</span>
               <span class="disc-meta-sep">{{ d.last_activity }}</span>
               {% for tag in d.topic_tags[:4] %}<span class="tag">{{ tag }}</span>{% endfor %}
+              {% if user_tags and d.topic_tags | select('in', user_tags) | list %}
+              <span style="font-size:.7rem;color:var(--accent);font-weight:600;margin-left:.15rem">· matches your interests</span>
+              {% endif %}
             </div>
           </div>
         </div>
