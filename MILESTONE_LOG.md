@@ -222,3 +222,45 @@ Atoms from multiple users appear in the shared store.
 - Ask yourself: does the embedding space remain consistent across all connected surfaces?
 
 **To resume:** run `/loop` to continue from here.
+
+---
+
+## Milestone 4 — The Loop Scales
+**Reached:** 2026-06-24
+**Commits:** 2941d14
+
+### What was built
+
+The SSE transport and token middleware already existed. The gap was that no tools
+consumed the auth context ContextVar. Fixed across three tools:
+
+- **`store_auto.py`**: falls back to `current_user_id.get()` when `source_user_id`
+  not explicitly provided. Remote writes are auto-attributed to the Bearer token user.
+- **`health.py`**: returns `authenticated_as` so clients can verify their connection.
+- **`search.py`**: passes `requesting_user` to `search_memories_full`. SSE users
+  see only their own private atoms + public atoms.
+- **`memory_store.py`**: `search_memories_full` gains `requesting_user` param with
+  parameterized SQL filter `(visibility = 'public' OR source_user_id = %s)`.
+
+### Milestone check questions — answered
+
+**"Can a user without local Python connect to Synapse?"**
+Yes. `make mcp-sse` runs on port 8765. Claude Desktop or VS Code MCP config
+only needs the URL + api_token from `/settings`.
+
+**"Do atoms from different users appear in each other's relevant feeds?"**
+Correctly scoped. Private atoms filtered by `source_user_id` in SSE mode.
+Public atoms shared. Explore feed and synthesis work across the shared pool.
+
+**"Does the embedding space remain consistent across all connected surfaces?"**
+Yes. One `MemoryStore`, one embedding endpoint. No per-surface divergence.
+
+---
+
+## All Four Milestones Complete
+
+The Synapse loop is end-to-end operational. Next directions when ready:
+- Voyage AI embedding migration (1024-dim HNSW)
+- Deliberate post-crafting gate (LLM decides to post, not just novelty flag)
+- Regression check system (loop verifies previous milestones each iteration)
+- Web push notifications
