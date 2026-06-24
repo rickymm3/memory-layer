@@ -48,11 +48,12 @@
         {% endfor %}
 
         <div style="margin-top:1.5rem;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem">
-          <div style="font-size:.88rem;font-weight:600;margin-bottom:.6rem">Add your perspective</div>
-          <p style="font-size:.82rem;color:var(--muted);margin-bottom:.85rem;line-height:1.45">
-            What do you know about this topic? Your input shapes how the AI answers this question for everyone.
-            You won't appear in any thread — it goes directly into the knowledge pipeline.
+          <div style="font-size:.88rem;font-weight:600;margin-bottom:.6rem">Share what you know</div>
+          <p style="font-size:.82rem;color:var(--muted);margin-bottom:1rem;line-height:1.45">
+            Your input shapes how the AI answers this for everyone. You won't appear in any thread — it goes directly into the knowledge pipeline.
           </p>
+
+          {# Quick perspective form #}
           <form method="post" action="{{ url_for('webapp.discussion_react', disc_id=disc.id) }}">
             <textarea name="perspective" rows="3" placeholder="Share what you know…"
               style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--radius);
@@ -61,11 +62,35 @@
               required minlength="10"></textarea>
             <button type="submit" class="btn btn-primary btn-sm">Submit perspective</button>
           </form>
+
+          {# LLM handoff #}
+          <div style="display:flex;align-items:center;gap:.75rem;margin:1rem 0">
+            <div style="flex:1;height:1px;background:var(--border)"></div>
+            <span style="font-size:.75rem;color:var(--muted);flex-shrink:0">or</span>
+            <div style="flex:1;height:1px;background:var(--border)"></div>
+          </div>
+
+          <div style="display:flex;align-items:flex-start;gap:.75rem;flex-wrap:wrap">
+            {% if current_user.is_admin %}
+            <a href="{{ url_for('webapp.chat') }}?discussion={{ disc.id }}"
+               class="btn btn-ghost btn-sm" style="flex-shrink:0">
+              Discuss in depth with your AI →
+            </a>
+            {% else %}
+            <a href="{{ url_for('webapp.chat') }}?discussion={{ disc.id }}"
+               class="btn btn-ghost btn-sm" style="flex-shrink:0">
+              Discuss in depth with your AI →
+            </a>
+            {% endif %}
+            <p style="font-size:.78rem;color:var(--muted);line-height:1.4;margin:0;align-self:center">
+              Opens a full conversation with context pre-loaded. Your AI will have everything it needs to engage deeply and update the knowledge base automatically.
+            </p>
+          </div>
         </div>
       {% else %}
         <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem;margin-bottom:1rem">
-          <div style="font-size:.88rem;font-weight:600;margin-bottom:.6rem">Be the first to add a perspective</div>
-          <p style="font-size:.82rem;color:var(--muted);margin-bottom:.85rem;line-height:1.45">
+          <div style="font-size:.88rem;font-weight:600;margin-bottom:.6rem">Be the first to share what you know</div>
+          <p style="font-size:.82rem;color:var(--muted);margin-bottom:1rem;line-height:1.45">
             What do you know about this topic? Your input shapes how the AI answers this question for everyone.
           </p>
           <form method="post" action="{{ url_for('webapp.discussion_react', disc_id=disc.id) }}">
@@ -76,6 +101,15 @@
               required minlength="10"></textarea>
             <button type="submit" class="btn btn-primary btn-sm">Submit perspective</button>
           </form>
+          <div style="display:flex;align-items:center;gap:.75rem;margin:1rem 0">
+            <div style="flex:1;height:1px;background:var(--border)"></div>
+            <span style="font-size:.75rem;color:var(--muted);flex-shrink:0">or</span>
+            <div style="flex:1;height:1px;background:var(--border)"></div>
+          </div>
+          <a href="{{ url_for('webapp.chat') }}?discussion={{ disc.id }}"
+             class="btn btn-ghost btn-sm">
+            Discuss in depth with your AI →
+          </a>
         </div>
       {% endif %}
     </div>

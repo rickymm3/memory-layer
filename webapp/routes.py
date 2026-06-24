@@ -1252,6 +1252,39 @@ def chat():
     history: list[dict] = _session_load(session_id)
     error = None
 
+    # Pre-load discussion context when arriving via "Discuss in depth" link
+    if request.method == "GET" and not history:
+        disc_param = request.args.get("discussion", "").strip()
+        if disc_param:
+            try:
+                with _conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT title, summary, atom_count, contributor_count FROM discussions WHERE id = %s;",
+                            (disc_param,),
+                        )
+                        disc_row = cur.fetchone()
+                if disc_row:
+                    disc_title, disc_summary, atom_count, contributor_count = disc_row
+                    context_msg = (
+                        f"I'd like to discuss: **{disc_title}**"
+                        + (f"\n\n{disc_summary}" if disc_summary else "")
+                        + f"\n\nThis topic has {contributor_count} contributor(s) and {atom_count} idea(s) in the knowledge base. "
+                        "What can you tell me about it, and what should I know?"
+                    )
+                    history = [{"role": "user", "content": context_msg}]
+                    # Immediately generate an opening response so the user lands in a live conversation
+                    from app.chat import chat_with_research, clean_assistant_response
+                    messages_for_llm = [{"role": "user", "content": context_msg}]
+                    raw_answer, memories, _, _, _, _, _ = chat_with_research(
+                        messages_for_llm, source_user_id=current_user.username
+                    )
+                    history.append({"role": "assistant", "content": clean_assistant_response(raw_answer), "memories": []})
+                    session_id = _session_save(None, history)
+                    session["chat_session_id"] = session_id
+            except Exception:
+                pass  # silently fall through to empty chat if anything fails
+
     if request.method == "POST":
         message = request.form.get("message", "").strip()
         if message:

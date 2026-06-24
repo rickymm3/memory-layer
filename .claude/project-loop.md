@@ -37,33 +37,47 @@ USER TALKS TO THEIR AI (normally — no change in experience)
             │
             └─ [LOW CONFIDENCE]
                  AI answers immediately from what it knows (never stalls the user)
-                 └─ Conversation is summarised → published as a shareable post
-                      (user does not post — the AI does it invisibly)
-                      └─ Post appears in feeds: All / Popular / Categories
-                           (other users browse and react — they don't know they're
-                            answering a question; it looks like a discussion post)
-                           └─ Reactions collected and weighted by:
-                                 · recency of claimed expertise
-                                 · behavioral signal strength
-                                 · agreement / disagreement across responders
-                                 · evidence quality
-                                 · prior usefulness outcomes
-                              └─ AI synthesises weighted reactions into enriched belief
-                                   ("Many people think X, some say Y,
-                                    those close to the subject say Z")
-                                   └─ Write pipeline:
-                                         quality score
-                                         → reconcile
-                                         → critic LLM review
-                                         → risk gate
-                                         → dual-write (atom + signal)
-                                      └─ Atom confidence updates
-                                           └─ HOURS LATER: notification fires
-                                                ("New perspectives on your conversation
-                                                 about [topic]")
-                                                └─ User returns to their chat
-                                                     └─ Sees enriched answer, not a thread
-                                                          └─ Loop repeats, stronger
+                 └─ Atoms committed (AI reference layer — never shown directly)
+                      └─ DELIBERATE GATE: does novelty score / interest flag warrant a post?
+                           (not every low-confidence turn becomes a post —
+                            only topics the AI judges as worth surfacing)
+                           │
+                           ├─ [NOT WORTH SURFACING] → atoms committed, no post. Done.
+                           │
+                           └─ [WORTH SURFACING]
+                                AI crafts an engaging post FROM the atoms
+                                (not a raw dump — a proper discussion opener:
+                                 framed question, interesting hook, topic tags)
+                                └─ Post appears in feeds: All / Popular / Categories
+                                     (other users browse and react — they don't know they're
+                                      answering a question; it looks like a discussion post)
+                                     └─ Two response paths for browsing users:
+                                           · Quick perspective form (one-shot text)
+                                           · "Discuss in depth with your AI" →
+                                              (deep link: opens chat with context pre-loaded,
+                                               full conversation flows into pipeline naturally)
+                                        └─ Reactions collected and weighted by:
+                                              · recency of claimed expertise
+                                              · behavioral signal strength
+                                              · agreement / disagreement across responders
+                                              · evidence quality
+                                              · prior usefulness outcomes
+                                           └─ AI synthesises weighted reactions into enriched belief
+                                                ("Many people think X, some say Y,
+                                                 those close to the subject say Z")
+                                                └─ Write pipeline:
+                                                      quality score
+                                                      → reconcile
+                                                      → critic LLM review
+                                                      → risk gate
+                                                      → dual-write (atom + signal)
+                                                   └─ Atom confidence updates
+                                                        └─ HOURS LATER: notification fires
+                                                             ("New perspectives on your conversation
+                                                              about [topic]")
+                                                             └─ User returns to their chat
+                                                                  └─ Sees enriched answer, not a thread
+                                                                       └─ Loop repeats, stronger
 ```
 
 ---
@@ -108,6 +122,16 @@ it could never derive from training alone. That compounding value — not social
 features — is why users stay and why the system improves with scale.
 Ask yourself: does this feature grow the corpus or just the interface?
 If only the interface — it is decoration. If it grows the corpus — it belongs.
+
+**6. Memory atoms and posts are different things.**
+A memory atom is the AI's internal reference layer — structured, confidence-weighted,
+never shown directly to users. A post is a human-readable artifact the AI
+deliberately crafts FROM atoms when it decides a topic is worth surfacing.
+The post evolves as atoms update. The atom is permanent infrastructure; the post is temporary
+and user-facing.
+Ask yourself: does this feature confuse atoms with posts?
+If yes, it is architecturally wrong. Atoms are private to the AI. Posts are crafted for humans.
+The AI decides when to make a post. The gate is deliberate, not automatic.
 
 ---
 
@@ -396,6 +420,11 @@ the data is correct.
 ✗  Building direct human-to-human interaction paths — Synapse is AI-mediated only
 ✗  Requiring profiles before the system can route — broadcast feeds are always the fallback
 ✗  Building a UX that makes the user feel like they posted on a forum
+✗  Auto-publishing every low-confidence turn — the deliberate gate must decide
+✗  Treating a post as a raw atom dump — posts are crafted by the AI, not copy-pasted
+✗  Conflating atoms (AI reference layer) with posts (human-facing artifacts)
+✗  Skipping the LLM handoff option — users must be able to engage deeply via their own AI
+✗  Making the text form the only response path — quick + deep must both exist
 ```
 
 ---
