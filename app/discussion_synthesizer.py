@@ -39,15 +39,19 @@ def synthesise_discussion(disc_id: str, db_url: str | None = None) -> str | None
         import psycopg
         with psycopg.connect(db_url) as conn:
             with conn.cursor() as cur:
-                # Fetch discussion metadata
+                # Fetch discussion metadata including age
                 cur.execute(
-                    "SELECT title, thread_status, created_by_user_id FROM discussions WHERE id = %s;",
+                    """
+                    SELECT title, thread_status, created_by_user_id,
+                           EXTRACT(EPOCH FROM (now() - created_at)) / 3600 AS age_hours
+                    FROM discussions WHERE id = %s;
+                    """,
                     (disc_id,),
                 )
                 disc_row = cur.fetchone()
                 if not disc_row:
                     return None
-                disc_title, current_status, creator_user_id = disc_row
+                disc_title, current_status, creator_user_id, age_hours = disc_row
 
                 # Don't re-synthesise if already answered/validated
                 if current_status in ("answered", "validated"):
@@ -71,6 +75,23 @@ def synthesise_discussion(disc_id: str, db_url: str | None = None) -> str | None
                 atoms = cur.fetchall()
 
         if len(atoms) < _MIN_REACTIONS:
+            # Mark as unresolved if gathering for > 48 hours with no traction
+            if float(age_hours or 0) > 48 and current_status == "gathering":
+                try:
+                    import psycopg as _pg
+                    with _pg.connect(db_url) as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                UPDATE discussions
+                                SET thread_status = 'unresolved', last_activity_at = now()
+                                WHERE id = %s AND thread_status = 'gathering';
+                                """,
+                                (disc_id,),
+                            )
+                        conn.commit()
+                except Exception:
+                    pass
             return None
 
         # Resolve creator username for scope
