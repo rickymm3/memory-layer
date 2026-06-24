@@ -1576,12 +1576,13 @@ def chat():
                 with _conn() as conn:
                     with conn.cursor() as cur:
                         cur.execute(
-                            "SELECT title, summary, atom_count, contributor_count FROM discussions WHERE id = %s;",
+                            "SELECT title, atom_count, contributor_count FROM discussions WHERE id = %s;",
                             (disc_param,),
                         )
                         disc_row = cur.fetchone()
                 if disc_row:
-                    disc_title, disc_summary, atom_count, contributor_count = disc_row
+                    disc_title, atom_count, contributor_count = disc_row
+                    disc_summary = None
                     context_msg = (
                         f"I'd like to discuss: **{disc_title}**"
                         + (f"\n\n{disc_summary}" if disc_summary else "")

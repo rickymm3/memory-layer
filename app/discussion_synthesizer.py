@@ -186,14 +186,15 @@ def synthesise_discussion(disc_id: str, db_url: str | None = None) -> str | None
                     """,
                     (disc_id,),
                 )
-                # Step 3: advance to 'answered' — enriched summary now deliverable
+                # Step 3: advance to 'answered' and store synthesis as summary
                 cur.execute(
                     """
                     UPDATE discussions
-                    SET thread_status = 'answered'
+                    SET thread_status = 'answered',
+                        summary = %s
                     WHERE id = %s;
                     """,
-                    (disc_id,),
+                    (synthesis_text[:2000], disc_id),
                 )
             conn.commit()
 
