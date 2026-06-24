@@ -47,13 +47,49 @@ def _ago(dt) -> str:
 def landing():
     recent = []
     novel = []
+    new_since_visit: list[dict] = []
+    last_seen_at = None
     try:
         with _conn() as conn:
             with conn.cursor() as cur:
+                # For logged-in users: surface discussions with new activity since last visit
+                if current_user.is_authenticated:
+                    cur.execute(
+                        "SELECT last_seen_at FROM users WHERE username = %s;",
+                        (current_user.username,),
+                    )
+                    row = cur.fetchone()
+                    last_seen_at = row[0] if row else None
+                    if last_seen_at:
+                        cur.execute(
+                            """
+                            SELECT id, title, topic_tags, contributor_count,
+                                   atom_count, novelty_flag, last_activity_at, thread_status
+                            FROM discussions
+                            WHERE last_activity_at > %s
+                            ORDER BY last_activity_at DESC
+                            LIMIT 10;
+                            """,
+                            (last_seen_at,),
+                        )
+                        for r in cur.fetchall():
+                            new_since_visit.append({
+                                "id": str(r[0]), "title": r[1], "topic_tags": r[2] or [],
+                                "contributor_count": r[3], "atom_count": r[4],
+                                "novelty_flag": r[5],
+                                "last_activity": _ago(r[6]),
+                                "thread_status": r[7] or "active",
+                            })
+                    # Update last_seen_at on every home page visit
+                    cur.execute(
+                        "UPDATE users SET last_seen_at = now() WHERE username = %s;",
+                        (current_user.username,),
+                    )
+                    conn.commit()
                 cur.execute(
                     """
                     SELECT id, title, topic_tags, contributor_count, atom_count,
-                           novelty_flag, last_activity_at
+                           novelty_flag, last_activity_at, thread_status
                     FROM discussions
                     ORDER BY last_activity_at DESC
                     LIMIT 20;
@@ -65,6 +101,7 @@ def landing():
                         "contributor_count": r[3], "atom_count": r[4],
                         "novelty_flag": r[5],
                         "last_activity": _ago(r[6]),
+                        "thread_status": r[7] or "active",
                     })
                 cur.execute(
                     """
@@ -81,7 +118,8 @@ def landing():
                     })
     except Exception:
         pass
-    return render_template("site/landing.html", recent=recent, novel=novel)
+    return render_template("site/landing.html", recent=recent, novel=novel,
+                           new_since_visit=new_since_visit, last_seen_at=last_seen_at)
 
 
 @site_bp.route("/signup", methods=["GET", "POST"])

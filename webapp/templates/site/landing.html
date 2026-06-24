@@ -19,6 +19,31 @@
     </div>
     {% endif %}
 
+    {% if current_user.is_authenticated and new_since_visit %}
+    <div style="margin-bottom:1.5rem">
+      <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--accent);margin-bottom:.75rem">
+        New since your last visit
+      </div>
+      {% for d in new_since_visit %}
+      <a href="{{ url_for('webapp.discussion_detail', disc_id=d.id) }}" class="disc-card"
+         style="border-color:rgba(108,140,245,.3)">
+        <div class="disc-card-title">
+          {% if d.novelty_flag %}<span class="badge badge-novel" style="margin-right:.4rem">★ novel</span>{% endif %}
+          {% set _status_styles = {'gathering':'background:#7c3aed;color:#fff','answered':'background:#16a34a;color:#fff','reopened':'background:#d97706;color:#fff','validated':'background:#15803d;color:#fff'} %}
+          {% if d.thread_status not in ('active', 'gathering') %}
+          <span class="badge" style="{{ _status_styles.get(d.thread_status, '') }};margin-right:.3rem;font-size:.65rem">{{ d.thread_status }}</span>
+          {% endif %}
+          {{ d.title }}
+        </div>
+        <div class="disc-meta" style="margin-top:.4rem">
+          <span>{{ d.last_activity }}</span>
+          {% for tag in d.topic_tags[:3] %}<span class="tag">{{ tag }}</span>{% endfor %}
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
       <h2 style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)">Recent Discussions</h2>
       {% if current_user.is_authenticated %}
