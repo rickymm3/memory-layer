@@ -49,7 +49,7 @@
     </div>
     {% elif disc.thread_status == 'validated' %}
     <div style="background:rgba(21,128,61,.07);border:1px solid rgba(21,128,61,.25);border-radius:var(--radius);padding:.75rem 1.1rem;margin-bottom:1.25rem;font-size:.84rem;color:#86efac">
-      ✓ Marked as helpful — confidence confirmed.
+      ✓ Marked as helpful — this answer has been confirmed.
     </div>
     {% endif %}
 
@@ -64,12 +64,11 @@
               <span style="font-weight:{% if c.is_mine %}600{% else %}400{% endif %};color:{% if c.is_mine %}var(--accent){% else %}var(--muted){% endif %}">
                 {{ c.attribution }}
               </span>
-              <span class="badge badge-{{ c.memory_type }}">{{ c.memory_type }}</span>
               {% if c.novelty_score >= 0.75 %}
-                <span style="color:var(--novel);font-weight:600;font-size:.72rem">★ novel</span>
+                <span style="color:var(--novel);font-weight:600;font-size:.72rem">★ new angle</span>
               {% endif %}
-              <span class="{% if c.confidence >= 0.7 %}conf-high{% elif c.confidence >= 0.4 %}conf-mid{% else %}conf-low{% endif %}">
-                {{ "%.0f%%" | format(c.confidence * 100) }} conf
+              <span class="{% if c.confidence >= 0.7 %}conf-high{% elif c.confidence >= 0.4 %}conf-mid{% else %}conf-low{% endif %}" title="Answer quality">
+                {% if c.confidence >= 0.7 %}strong{% elif c.confidence >= 0.4 %}moderate{% else %}uncertain{% endif %}
               </span>
               <span>{{ c.added_at }}</span>
             </div>

@@ -19,6 +19,7 @@
     ('Private', stats.private, 'var(--muted)'),
     ('Novel', stats.novel, 'var(--novel)'),
     ('Discussions', stats.discussions, 'var(--accent)'),
+    ('Resolved', stats.resolved, 'var(--green)'),
     ('Users', stats.users, 'var(--amber)'),
   ] %}
   <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:.75rem 1rem;text-align:center">
@@ -27,6 +28,22 @@
   </div>
   {% endfor %}
 </div>
+
+<!-- Resolution rate bar -->
+{% if stats.discussions > 0 %}
+<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:.85rem 1rem;margin-bottom:1.25rem">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:.4rem">
+    <span style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)">Resolution Rate</span>
+    <span style="font-size:1.1rem;font-weight:700;color:{% if stats.resolution_rate >= 60 %}var(--green){% elif stats.resolution_rate >= 30 %}var(--amber){% else %}var(--red){% endif %}">{{ stats.resolution_rate }}%</span>
+  </div>
+  <div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden">
+    <div style="height:100%;width:{{ stats.resolution_rate }}%;background:{% if stats.resolution_rate >= 60 %}var(--green){% elif stats.resolution_rate >= 30 %}var(--amber){% else %}var(--red){% endif %};border-radius:3px;transition:width .3s"></div>
+  </div>
+  <div style="font-size:.74rem;color:var(--muted);margin-top:.35rem">
+    {{ stats.resolved }} of {{ stats.discussions }} discussion{{ 's' if stats.discussions != 1 }} answered or validated · {{ stats.pending }} still gathering
+  </div>
+</div>
+{% endif %}
 
 <!-- Filters -->
 <form method="get" style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1.25rem;align-items:flex-end">

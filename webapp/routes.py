@@ -569,6 +569,26 @@ def admin():
                 cur.execute("SELECT COUNT(*) FROM discussions;")
                 stats["discussions"] = cur.fetchone()[0]
 
+                # Resolution rate: % of discussions that reached answered/validated
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (WHERE thread_status IN ('answered', 'validated')) AS resolved,
+                        COUNT(*) FILTER (WHERE thread_status IN ('gathering', 'updated', 'unresolved', 'reopened')) AS pending,
+                        COUNT(*) AS total
+                    FROM discussions;
+                    """
+                )
+                res = cur.fetchone()
+                resolved, pending, disc_total = (res[0] or 0), (res[1] or 0), (res[2] or 1)
+                stats["resolved"] = resolved
+                stats["pending"] = pending
+                stats["resolution_rate"] = round(100 * resolved / max(disc_total, 1), 1)
+                stats["disc_status"] = {
+                    r[0]: r[1]
+                    for r in cur.fetchmany(0) or []  # cleared by fetchone above — use stats
+                }
+
                 cur.execute("SELECT COUNT(*) FROM users;")
                 stats["users"] = cur.fetchone()[0]
 
