@@ -1344,7 +1344,10 @@ def discussion_react(disc_id):
                             SELECT d.created_by_user_id, d.id, 1, 'reopened'
                             FROM discussions d
                             WHERE d.id = %s
-                              AND d.created_by_user_id IS NOT NULL;
+                              AND d.created_by_user_id IS NOT NULL
+                            ON CONFLICT (user_id, discussion_id) WHERE read = false
+                            DO UPDATE SET new_atom_count = user_notifications.new_atom_count + 1,
+                                          notification_type = 'reopened';
                             """,
                             (str(disc_id),),
                         )
