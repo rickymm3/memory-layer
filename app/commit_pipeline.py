@@ -804,4 +804,31 @@ class MemoryCommitPipeline:
         except Exception:
             pass  # trace failure is non-fatal
 
+        # Advance discussion thread_status → 'updated' after a successful dual-write.
+        # Only escalates; never overwrites answered/validated/reopened.
+        if final_decision == "commit" and committed_atom_id:
+            try:
+                import psycopg as _pg
+                _db_url = (
+                    getattr(self.store, "_dsn", None)
+                    or __import__("os").environ.get("DATABASE_URL", "")
+                )
+                if _db_url:
+                    with _pg.connect(_db_url) as _conn:
+                        with _conn.cursor() as _cur:
+                            _cur.execute(
+                                """
+                                UPDATE discussions d
+                                SET thread_status = 'updated'
+                                FROM discussion_atoms da
+                                WHERE da.discussion_id = d.id
+                                  AND da.atom_id = %s
+                                  AND d.thread_status IN ('active', 'gathering');
+                                """,
+                                (committed_atom_id,),
+                            )
+                        _conn.commit()
+            except Exception:
+                pass  # discussion status advancement is non-fatal
+
         return decision_obj

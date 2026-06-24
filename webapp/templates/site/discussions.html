@@ -21,6 +21,19 @@
           <div style="flex:1;min-width:0">
             <div class="disc-card-title">
               {% if d.novelty_flag %}<span class="badge badge-novel" style="margin-right:.4rem">★ novel</span>{% endif %}
+              {% if d.thread_status and d.thread_status != 'active' %}
+                {% set _status_styles = {
+                  'gathering':  'background:#7c3aed;color:#fff',
+                  'updated':    'background:#0ea5e9;color:#fff',
+                  'answered':   'background:#16a34a;color:#fff',
+                  'validated':  'background:#15803d;color:#fff',
+                  'reopened':   'background:#d97706;color:#fff',
+                  'unresolved': 'background:#6b7280;color:#fff',
+                } %}
+                <span class="badge" style="{{ _status_styles.get(d.thread_status, '') }};margin-right:.4rem;font-size:.68rem">
+                  {{ d.thread_status }}
+                </span>
+              {% endif %}
               {{ d.title }}
             </div>
             <div class="disc-meta" style="margin-top:.4rem">

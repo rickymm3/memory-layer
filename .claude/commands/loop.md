@@ -1,43 +1,100 @@
 ---
 description: >
-  Synapse autonomous development loop. Reads the synapse-loop primer on every
-  iteration, applies its checks to current work, continues implementation, and
-  schedules the next iteration.
-allowed-tools: Read, Write, Edit, Bash, mcp__memoryLayer__memory_task_context, mcp__memoryLayer__memory_store_auto, mcp__memoryLayer__memory_search
+  Synapse autonomous development loop. On every iteration: reads the primer,
+  audits the codebase against the loop diagram, picks the highest-priority
+  open node, implements it, tests it, commits it, and updates BACKLOG.md.
+  Does not wait for user direction.
+allowed-tools: Read, Write, Edit, Bash, Grep, Glob, mcp__memoryLayer__memory_store_auto, mcp__memoryLayer__memory_search
 ---
 
-Start of loop iteration. Do the following steps in order:
+You are running autonomously on behalf of the user. Do not wait for direction.
+Your job is to advance the Synapse project by closing open loop nodes.
 
-**Step 1 — Load the primer.**
-Read the file at:
+---
+
+## Step 1 — Load the operating framework
+
+Read this file in full before doing anything else:
 /home/ricky/memory-layer/.claude/commands/synapse-loop.md
 
-This is your operating framework for this session. Apply it to every decision below.
+This defines the architecture you are implementing. Every decision must trace
+to a node in the core loop diagram.
 
-**Step 2 — Orient.**
-- What is the current state of the project? Check git status and recent commits.
-- What was the last thing worked on? Check task list if one exists.
-- Is there anything broken or incomplete from the previous iteration?
+---
 
-**Step 3 — Apply the loop checks from the primer.**
-Before touching any code, run through:
-1. Does the next piece of work connect to a named node in the core loop?
-2. Will write integrity be preserved across all three surfaces?
-3. Does it handle the sparse-profile case?
+## Step 2 — Load the backlog
 
-If any check fails — name the gap, correct direction, then continue.
+Read this file:
+/home/ricky/memory-layer/BACKLOG.md
 
-**Step 4 — Do the work.**
-Implement the next logical step. Prefer closing open loop nodes over starting new ones.
+It contains the ranked list of open loop nodes. The top item is what you work
+on this iteration unless it is blocked — in which case take the next unblocked
+item and note the blocker on the blocked one.
 
-**Step 5 — Session-close resolution check.**
-After work is done:
-- Name which node was closed.
-- Confirm write integrity was not broken.
-- Name any gap that was opened (if any).
+---
 
-**Step 6 — Schedule next iteration.**
-Use ScheduleWakeup with:
+## Step 3 — Audit before acting
+
+Before touching code, verify:
+1. Is the top backlog item already partially implemented? Check the relevant
+   files. Do not duplicate work.
+2. Does the item connect to a named node in the core loop? If not, skip it
+   and note the mismatch in BACKLOG.md.
+3. Will implementing it preserve write integrity on all three surfaces?
+
+---
+
+## Step 4 — Implement
+
+Do the actual work. Write the code, the migration, the template, the test.
+Do not describe what could be done — do it.
+
+Target: one complete, working, tested unit of functionality per iteration.
+A unit is the smallest thing that closes a node in the loop — a working route,
+a passing test suite, a wired UI state change.
+
+If the item is too large for one iteration: implement the first logical slice,
+commit it, update BACKLOG.md to reflect what was done and what remains.
+
+---
+
+## Step 5 — Test
+
+Run the full test suite before committing:
+```
+source .venv/bin/activate && python -m pytest tests/ -q --tb=short
+```
+
+If tests fail: fix them. Do not commit broken code.
+If the item requires a new test: write it.
+
+---
+
+## Step 6 — Commit
+
+Commit with a message that names the loop node that was closed.
+Format: `feat: <what was built> — closes [Node Name] loop node`
+
+---
+
+## Step 7 — Update BACKLOG.md
+
+Mark the completed item as done with the commit hash.
+If the item was partially completed, update its description to reflect
+what remains. Add any new open nodes discovered during implementation.
+
+---
+
+## Step 8 — Session-close check (from the primer)
+
+Ask: "Did this iteration close a gap or open one?"
+If it opened one — name it and add it to BACKLOG.md before scheduling.
+
+---
+
+## Step 9 — Schedule next iteration
+
+Use ScheduleWakeup:
 - prompt: `<<autonomous-loop-dynamic>>`
 - delaySeconds: 1800
-- reason: "Synapse development loop — checking for next open node"
+- reason: "Synapse loop — completed [what you just built], next: [top of backlog]"

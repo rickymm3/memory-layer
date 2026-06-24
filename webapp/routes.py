@@ -870,7 +870,8 @@ def discussions():
                     """
                     SELECT d.id, d.title, d.topic_tags, d.contributor_count,
                            d.atom_count, d.novelty_flag, d.last_activity_at,
-                           COALESCE(SUM(n.new_atom_count) FILTER (WHERE n.read = false), 0) AS unread
+                           COALESCE(SUM(n.new_atom_count) FILTER (WHERE n.read = false), 0) AS unread,
+                           d.thread_status
                     FROM discussions d
                     JOIN discussion_atoms da ON da.discussion_id = d.id
                     LEFT JOIN user_notifications n
@@ -895,6 +896,7 @@ def discussions():
                         "novelty_flag": r[5],
                         "last_activity": _ago(r[6]),
                         "unread": unread,
+                        "thread_status": r[8] or "active",
                     })
     except Exception:
         pass
