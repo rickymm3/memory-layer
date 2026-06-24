@@ -391,6 +391,7 @@ class SQLiteStore:
         source_url: str | None = None,
         atom_source_type: str | None = None,
         source_user_id: str | None = None,
+        visibility: str | None = None,  # accepted but ignored — SQLite has no visibility column
     ) -> tuple[str, str]:
         summary = (context_summary or "").strip() or content
         embedding = self.ollama.embed_text(content)
