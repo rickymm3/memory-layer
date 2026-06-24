@@ -1050,12 +1050,14 @@ def search():
 def discussions():
     rows = []
     unread_total = 0
+    status_filter = request.args.get("status", "").strip().lower()
+    valid_statuses = {"gathering", "updated", "answered", "validated", "reopened", "unresolved"}
+    if status_filter not in valid_statuses:
+        status_filter = ""
     try:
         with _conn() as conn:
             with conn.cursor() as cur:
-                # Discussions this user has contributed to, with their unread count
-                cur.execute(
-                    """
+                base_sql = """
                     SELECT d.id, d.title, d.topic_tags, d.contributor_count,
                            d.atom_count, d.novelty_flag, d.last_activity_at,
                            COALESCE(SUM(n.new_atom_count) FILTER (WHERE n.read = false), 0) AS unread,
@@ -1066,12 +1068,18 @@ def discussions():
                         ON n.discussion_id = d.id
                         AND n.user_id = (SELECT id FROM users WHERE username = %s)
                     WHERE da.source_user_id = %s
+                    {status_clause}
                     GROUP BY d.id
                     ORDER BY d.last_activity_at DESC
                     LIMIT 50;
-                    """,
-                    (current_user.username, current_user.username),
-                )
+                """
+                if status_filter:
+                    sql = base_sql.format(status_clause="AND d.thread_status = %s")
+                    params = (current_user.username, current_user.username, status_filter)
+                else:
+                    sql = base_sql.format(status_clause="")
+                    params = (current_user.username, current_user.username)
+                cur.execute(sql, params)
                 for r in cur.fetchall():
                     unread = int(r[7])
                     unread_total += unread
@@ -1088,7 +1096,9 @@ def discussions():
                     })
     except Exception:
         pass
-    return render_template("site/discussions.html", discussions=rows, unread_total=unread_total)
+    return render_template("site/discussions.html",
+                           discussions=rows, unread_total=unread_total,
+                           status_filter=status_filter)
 
 
 @site_bp.route("/discussion/<uuid:disc_id>")

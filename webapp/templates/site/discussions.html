@@ -14,6 +14,17 @@
       </a>
     </div>
 
+    <div style="display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:1.25rem">
+      {% set statuses = [('', 'All'), ('gathering', 'Gathering'), ('answered', 'Answered'), ('reopened', 'New info'), ('validated', 'Validated'), ('unresolved', 'Unresolved')] %}
+      {% for val, label in statuses %}
+      <a href="{{ url_for('webapp.discussions') }}{% if val %}?status={{ val }}{% endif %}"
+         style="padding:.28rem .7rem;border-radius:20px;font-size:.78rem;font-weight:600;text-decoration:none;
+                {% if status_filter == val %}background:var(--accent);color:#fff;{% else %}background:var(--bg2);border:1px solid var(--border);color:var(--muted);{% endif %}">
+        {{ label }}
+      </a>
+      {% endfor %}
+    </div>
+
     {% if discussions %}
       {% for d in discussions %}
       <a href="{{ url_for('webapp.discussion_detail', disc_id=d.id) }}" class="disc-card">
