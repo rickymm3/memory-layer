@@ -106,6 +106,11 @@ HNSW index enabled. Old qwen3 embeddings removed.
 
 ## Completed
 
+- Thread status system — commit `158056f` (2026-06-24)
+  Added `thread_status` column to discussions (migration 024). Commit pipeline
+  auto-advances to `updated` after dual-write. Status badges in discussions UI.
+  `question_atom_id` + `created_by_user_id` on discussions for future routing.
+
 - `source_user_id` propagation fix — commit `0318e19` (2026-06-24)
   Threaded `source_user_id` through `chat_with_research` → `_post_turn_reflection`
   → `run_turn_reflection` → `commit_candidate`. Brain page now shows atoms.
