@@ -1,0 +1,89 @@
+{% extends "site/base.html" %}
+{% block title %}Search — Synapse{% endblock %}
+
+{% block content %}
+<div style="max-width:720px;margin:0 auto">
+  <div class="page-header">
+    <h1>Search</h1>
+    <p>Find existing discussions before starting a new one.</p>
+  </div>
+
+  <form method="get" action="{{ url_for('webapp.search') }}" style="margin-bottom:1.5rem">
+    <div style="display:flex;gap:.5rem">
+      <input type="text" name="q" value="{{ query }}" placeholder="Search discussions and knowledge…"
+        autofocus
+        style="flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);
+               color:var(--text);padding:.6rem .85rem;font-size:.93rem;transition:border-color .15s"
+        onfocus="this.style.borderColor='var(--accent)'"
+        onblur="this.style.borderColor='var(--border2)'">
+      <button type="submit" class="btn btn-primary">Search</button>
+    </div>
+  </form>
+
+  {% if query %}
+    {# Discussion results #}
+    {% if results %}
+    <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-bottom:.75rem">
+      {{ results | length }} discussion{{ 's' if results | length != 1 }} found
+    </div>
+    {% for d in results %}
+    <a href="{{ url_for('webapp.discussion_detail', disc_id=d.id) }}" class="disc-card">
+      <div class="disc-card-title">{{ d.title }}</div>
+      {% if d.summary %}
+      <div style="font-size:.84rem;color:var(--muted);margin-top:.3rem;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{{ d.summary }}</div>
+      {% endif %}
+      <div class="disc-meta" style="margin-top:.4rem">
+        <span>{{ d.contributor_count }} contributor{{ 's' if d.contributor_count != 1 }}</span>
+        <span class="disc-meta-sep">{{ d.last_activity }}</span>
+        {% set _status_styles = {
+          'gathering':  'background:#7c3aed;color:#fff',
+          'updated':    'background:#0ea5e9;color:#fff',
+          'answered':   'background:#16a34a;color:#fff',
+          'validated':  'background:#15803d;color:#fff',
+        } %}
+        {% if d.thread_status not in ('active', 'gathering') %}
+        <span class="badge disc-meta-sep" style="{{ _status_styles.get(d.thread_status, '') }};font-size:.68rem">{{ d.thread_status }}</span>
+        {% endif %}
+        {% for tag in d.topic_tags[:4] %}<span class="tag">{{ tag }}</span>{% endfor %}
+      </div>
+    </a>
+    {% endfor %}
+    {% endif %}
+
+    {# Knowledge atom results #}
+    {% if atom_results %}
+    <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:1.5rem 0 .75rem">
+      Related knowledge
+    </div>
+    {% for a in atom_results %}
+    <div style="padding:.85rem 1rem;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:.5rem">
+      <div style="font-size:.86rem;line-height:1.55;color:var(--text)">{{ a.content }}</div>
+      <div style="font-size:.74rem;color:var(--muted);margin-top:.4rem;display:flex;gap:.6rem">
+        <span class="badge badge-{{ a.memory_type }}">{{ a.memory_type }}</span>
+        <span>{{ (a.confidence * 100) | int }}% confidence</span>
+        <span>{{ (a.similarity * 100) | int }}% match</span>
+      </div>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if not results and not atom_results %}
+    <div class="empty">
+      <h3>Nothing found for "{{ query }}"</h3>
+      <p style="margin-top:.4rem">
+        Try broader terms, or <a href="{{ url_for('webapp.explore') }}">browse all discussions</a>.
+      </p>
+    </div>
+    {% endif %}
+
+  {% else %}
+    <div class="empty" style="padding:2.5rem 1rem">
+      <h3>Search before you start a conversation</h3>
+      <p style="margin-top:.4rem">
+        Someone may have already asked this. Finding the existing thread means your question gets
+        a richer answer — and you add to the collective knowledge instead of fragmenting it.
+      </p>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

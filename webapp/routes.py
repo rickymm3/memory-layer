@@ -976,6 +976,75 @@ def categories():
     )
 
 
+@site_bp.route("/search")
+@login_required
+def search():
+    """Find existing discussions before creating a new one — reduces duplicates."""
+    query = request.args.get("q", "").strip()
+    results: list[dict] = []
+    atom_results: list[dict] = []
+
+    if query:
+        try:
+            with _conn() as conn:
+                with conn.cursor() as cur:
+                    # Full-text search on discussion title + summary
+                    cur.execute(
+                        """
+                        SELECT d.id, d.title, d.topic_tags, d.contributor_count,
+                               d.atom_count, d.thread_status, d.last_activity_at,
+                               d.summary
+                        FROM discussions d
+                        WHERE d.auto_published = true
+                          AND (d.title ILIKE %s OR d.summary ILIKE %s
+                               OR %s = ANY(d.topic_tags))
+                        ORDER BY d.contributor_count DESC, d.last_activity_at DESC
+                        LIMIT 20;
+                        """,
+                        (f"%{query}%", f"%{query}%", query.lower()),
+                    )
+                    for r in cur.fetchall():
+                        results.append({
+                            "id": str(r[0]),
+                            "title": r[1],
+                            "topic_tags": r[2] or [],
+                            "contributor_count": r[3],
+                            "atom_count": r[4],
+                            "thread_status": r[5] or "gathering",
+                            "last_activity": _ago(r[6]),
+                            "summary": r[7] or "",
+                        })
+        except Exception:
+            pass
+
+        # Also search memory atoms (semantic — finds related knowledge)
+        try:
+            from app.topic_affinity import get_user_topic_tags
+            import os as _os
+            db_url = _os.environ.get("DATABASE_URL", "")
+            store = __import__("app.db", fromlist=["get_store"]).get_store()
+            atom_rows = store.search_memories_full(
+                query=query, limit=5, min_similarity=0.45
+            )
+            for a in atom_rows:
+                atom_results.append({
+                    "id": str(a.get("id", "")),
+                    "content": (a.get("context_summary") or a.get("content", ""))[:300],
+                    "memory_type": a.get("memory_type", ""),
+                    "confidence": round(float(a.get("confidence", 0)), 2),
+                    "similarity": round(float(a.get("similarity", 0)), 3),
+                })
+        except Exception:
+            pass
+
+    return render_template(
+        "site/search.html",
+        query=query,
+        results=results,
+        atom_results=atom_results,
+    )
+
+
 @site_bp.route("/discussions")
 @login_required
 def discussions():
