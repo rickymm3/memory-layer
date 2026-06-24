@@ -1463,10 +1463,10 @@ def notifications():
                     notif_type = r[7]
                     if notif_type == "published":
                         message = "Your conversation was shared with people who may know more."
+                    elif notif_type in ("answered",) or status == "answered":
+                        message = "Your conversation has a new answer."
                     elif notif_type == "reopened" or status == "reopened":
                         message = "New information arrived on your conversation."
-                    elif status == "answered":
-                        message = "Your conversation has a new answer."
                     elif status == "updated":
                         count = r[4]
                         message = f"New perspective{'s' if count != 1 else ''} arrived on your conversation."
