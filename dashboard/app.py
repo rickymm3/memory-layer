@@ -195,7 +195,7 @@ def atom_detail(atom_id):
                        last_recomputed_at, created_at,
                        lifecycle_status, superseded_by_atom_id,
                        lifecycle_reason, retrieval_priority, lifecycle_updated_at,
-                       source_type, source_url
+                       source_type, source_url, unique_source_count
                 FROM memory_atoms WHERE id = %s;
                 """,
                 (str(atom_id),),
@@ -238,6 +238,7 @@ def atom_detail(atom_id):
         "lifecycle_updated_at": row[17].strftime("%Y-%m-%d %H:%M:%S") if row[17] else None,
         "source_type": row[18] or "local",
         "source_url": row[19],
+        "unique_source_count": int(row[20]) if row[20] is not None else 0,
     }
 
     signals = [
@@ -476,8 +477,8 @@ def model_lessons():
         with conn.cursor() as cur:
             cur.execute(
                 f"""
-                SELECT id, scope, content, memory_type,
-                       confidence, importance, lifecycle_status, created_at
+                SELECT id, scope, content, context_summary, memory_type,
+                       confidence, importance, lifecycle_status, unique_source_count, created_at
                 FROM memory_atoms
                 WHERE 1=1
                   {scope_clause}
@@ -498,17 +499,19 @@ def model_lessons():
 
     # Group by scope → category
     by_scope: dict[str, dict[str, list]] = {}
-    for atom_id, scope, content, mtype, conf, imp, status, created_at in rows:
+    for atom_id, scope, content, ctx_summary, mtype, conf, imp, status, usc, created_at in rows:
         by_scope.setdefault(scope, {cat: [] for cat in _CATEGORY_ORDER})
         cat = _MODEL_CATEGORY.get(mtype or "", "General")
         by_scope[scope][cat].append({
             "id": str(atom_id),
             "id_short": str(atom_id)[:8],
             "content": content,
+            "context_summary": ctx_summary,
             "memory_type": mtype,
             "confidence": round(float(conf), 3) if conf is not None else None,
             "importance": round(float(imp), 3) if imp is not None else None,
             "lifecycle_status": status,
+            "unique_source_count": int(usc) if usc is not None else 0,
             "created_at": created_at.strftime("%Y-%m-%d") if created_at else "—",
         })
 

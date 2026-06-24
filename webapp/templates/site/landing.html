@@ -1,0 +1,91 @@
+{% extends "site/base.html" %}
+{% block title %}Synapse — AI beliefs, collectively validated{% endblock %}
+
+{% block content %}
+<div class="cols">
+  <div>
+    {% if not current_user.is_authenticated %}
+    <div style="background:linear-gradient(135deg,rgba(108,140,245,.12),rgba(167,139,250,.08));border:1px solid rgba(108,140,245,.25);border-radius:8px;padding:2rem;margin-bottom:1.5rem">
+      <h1 style="font-size:1.6rem;font-weight:700;letter-spacing:-.03em;margin-bottom:.5rem">
+        Your AI keeps your ideas in<br>conversation with the world.
+      </h1>
+      <p style="color:var(--muted);font-size:.95rem;margin-bottom:1.25rem;max-width:500px">
+        Just talk to your AI. Synapse captures the ideas, finds where others are thinking the same things, and surfaces new perspectives — without you ever posting publicly.
+      </p>
+      <div style="display:flex;gap:.75rem">
+        <a href="{{ url_for('webapp.signup') }}" class="btn btn-primary">Get started free</a>
+        <a href="{{ url_for('webapp.login') }}" class="btn btn-ghost">Log in</a>
+      </div>
+    </div>
+    {% endif %}
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+      <h2 style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)">Recent Discussions</h2>
+      {% if current_user.is_authenticated %}
+        <a href="{{ url_for('webapp.capture') }}" class="btn btn-primary btn-sm">+ Capture thought</a>
+      {% endif %}
+    </div>
+
+    {% if recent %}
+      {% for d in recent %}
+      <a href="{{ url_for('webapp.discussion_detail', disc_id=d.id) }}" class="disc-card">
+        <div class="disc-card-title">
+          {% if d.novelty_flag %}<span class="badge badge-novel" style="margin-right:.4rem">★ novel</span>{% endif %}
+          {{ d.title }}
+        </div>
+        <div class="disc-meta" style="margin-top:.4rem">
+          <span>{{ d.contributor_count }} contributor{{ 's' if d.contributor_count != 1 }}</span>
+          <span class="disc-meta-sep">{{ d.atom_count }} idea{{ 's' if d.atom_count != 1 }}</span>
+          <span class="disc-meta-sep">{{ d.last_activity }}</span>
+          {% for tag in d.topic_tags[:4] %}<span class="tag">{{ tag }}</span>{% endfor %}
+        </div>
+      </a>
+      {% endfor %}
+    {% else %}
+      <div class="empty">
+        <h3>No discussions yet</h3>
+        <p style="margin-top:.4rem">Discussions form automatically as people share ideas.<br>
+        {% if current_user.is_authenticated %}
+          <a href="{{ url_for('webapp.capture') }}">Capture your first thought</a> to get started.
+        {% else %}
+          <a href="{{ url_for('webapp.signup') }}">Sign up</a> to contribute.
+        {% endif %}
+        </p>
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="sidebar">
+    {% if novel %}
+    <div class="widget">
+      <div class="widget-title">★ Novel Ideas</div>
+      {% for d in novel %}
+      <div class="widget-item">
+        <a href="{{ url_for('webapp.discussion_detail', disc_id=d.id) }}" style="color:var(--novel);font-size:.85rem;font-weight:500;display:block;line-height:1.35">
+          {{ d.title | truncate(60) }}
+        </a>
+        <div class="widget-item-meta">{{ d.contributor_count }} contributors · {{ d.last_activity }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="widget">
+      <div class="widget-title">How it works</div>
+      <div style="font-size:.83rem;color:var(--muted);line-height:1.75">
+        <p style="margin-bottom:.4rem">① Talk to your AI normally</p>
+        <p style="margin-bottom:.4rem">② Your ideas get captured and structured</p>
+        <p style="margin-bottom:.4rem">③ Others thinking about the same things get notified — anonymously</p>
+        <p>④ Beliefs evolve through collective validation</p>
+      </div>
+    </div>
+
+    {% if not current_user.is_authenticated %}
+    <div class="widget" style="text-align:center;padding:1.25rem">
+      <p style="font-size:.85rem;color:var(--muted);margin-bottom:.75rem">Join to contribute your own ideas</p>
+      <a href="{{ url_for('webapp.signup') }}" class="btn btn-primary" style="width:100%;justify-content:center">Sign up free</a>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

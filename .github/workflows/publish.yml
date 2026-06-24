@@ -1,0 +1,62 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify versions match
+        run: |
+          PY=$(grep '^version' pyproject.toml | head -1 | grep -oP '[\d.]+')
+          NPM=$(node -p "require('./npm/package.json').version")
+          if [ "$PY" != "$NPM" ]; then
+            echo "Version mismatch: pyproject.toml=$PY npm/package.json=$NPM"
+            echo "Update both files to the same version before tagging."
+            exit 1
+          fi
+          echo "Version check passed: $PY"
+
+      - name: Verify tag matches version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/v}
+          PY=$(grep '^version' pyproject.toml | head -1 | grep -oP '[\d.]+')
+          if [ "$TAG" != "$PY" ]; then
+            echo "Tag v$TAG does not match pyproject.toml version $PY"
+            exit 1
+          fi
+
+      - name: Build Python package
+        run: |
+          pip install build twine
+          python -m build
+
+      - name: Publish to PyPI
+        run: twine upload dist/*
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+
+      - name: Publish to npm
+        run: npm publish
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

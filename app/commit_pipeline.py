@@ -28,6 +28,7 @@ from typing import Any
 
 from app.llm_provider import LLMProvider, get_llm_client
 from app.memory_store import MemoryStore, REVISABLE_TYPES
+from app.sqlite_store import SQLiteStore as _SQLiteStore
 from app.reconciliation import CandidateReconciler
 
 # Scope must match type:name format (e.g. project:foo, model:bar) or be a known
@@ -55,8 +56,11 @@ _ALLOWED_REJECTION_REASONS = frozenset({
 })
 
 _CRITIC_SYSTEM = (
-    "You are a memory quality critic for a durable personal knowledge base. "
-    "Evaluate candidate memories for storage. "
+    "You are a memory critic for an epistemic belief system. Your job is to classify "
+    "and reframe content for storage — not to reject it. Every signal has value: "
+    "wrong facts reveal user beliefs, vague content reveals uncertainty, ephemeral "
+    "content reveals temporal context. You reject ONLY secrets/credentials and "
+    "incoherent noise. Everything else is stored with appropriate type and confidence. "
     "Return STRICT JSON only — no markdown, no explanation outside the JSON object."
 )
 
@@ -119,6 +123,8 @@ def _build_critic_prompt(
     reconciler_relationship: str,
     reconciler_reason: str,
     related_atoms: list[dict[str, Any]],
+    reframe_hint: str | None = None,
+    suggested_memory_type: str | None = None,
 ) -> str:
     related_payload = [
         {
@@ -131,8 +137,14 @@ def _build_critic_prompt(
         }
         for a in related_atoms
     ]
+    classifier_hints = {}
+    if suggested_memory_type:
+        classifier_hints["suggested_memory_type"] = suggested_memory_type
+    if reframe_hint:
+        classifier_hints["reframe_hint"] = reframe_hint
+
     return (
-        "Evaluate this memory candidate for storage in a durable knowledge base.\n\n"
+        "Classify and store this memory candidate in an epistemic belief system.\n\n"
         "Candidate:\n"
         + json.dumps(
             {
@@ -144,6 +156,11 @@ def _build_critic_prompt(
             ensure_ascii=False,
             indent=2,
         )
+        + (
+            "\n\nClassifier hints (from write quality pre-gate):\n"
+            + json.dumps(classifier_hints, ensure_ascii=False, indent=2)
+            if classifier_hints else ""
+        )
         + "\n\nReconciler verdict:\n"
         + json.dumps(
             {"relationship": reconciler_relationship, "reason": reconciler_reason},
@@ -153,31 +170,34 @@ def _build_critic_prompt(
         + "\n\nRelated existing atoms:\n"
         + json.dumps(related_payload, ensure_ascii=False, indent=2)
         + "\n\n"
-        "Criteria:\n"
-        "- Durable: will this be useful in future tasks/conversations? If no → reject (temporary).\n"
-        "- Unique: does it add information not already captured? "
-        "If semantically equivalent to an existing atom → reinforce_existing.\n"
-        "- Clear: is it a complete, unambiguous statement? If not → reject (too_vague) or rewrite.\n"
-        "- Safe: does it contain sensitive, private, or personal data? If yes → reject (sensitive).\n"
-        "- Non-obvious: would any competent assistant already know this without being told? "
-        "If yes → reject (obvious). "
-        "EXCEPTION: memory_type=opinion or memory_type=preference are NEVER obvious — "
-        "the user's personal view or preference has value even if the topic is common knowledge.\n"
-        "- Opinion/belief handling: for opinion and preference types, the canonical form should "
-        "start with a clear attribution, e.g. 'The user believes...' or 'The user prefers...'. "
-        "Rewrite vague opinion statements to this form. Do not reject low-confidence opinions — "
-        "store them with their stated confidence.\n"
-        "- Relationship respect: if reconciler says duplicate/reinforcement, "
-        "do NOT commit a new atom — use reinforce_existing.\n"
-        "- If reconciler says refinement: use refine_existing unless proposal is safer.\n"
-        "- If reconciler says conflict/opinion_change: prefer mark_conflict or supersede_existing.\n"
-        "- Always rewrite final_memory_text into a clean, complete, "
-        "durable standalone statement. Do not invent context.\n\n"
+        "Epistemic storage rules:\n"
+        "- NEVER reject for quality reasons (vague, short, obvious, temporary). "
+        "These are valid epistemic signals stored at lower confidence.\n"
+        "- ONLY reject for: secrets/credentials (sensitive) or total incoherence (incoherent).\n"
+        "- Unverified user claims → rewrite as 'The user believes/asserts X.' "
+        "Set memory_type=belief, confidence 0.3–0.45.\n"
+        "- Vague or uncertain content → rewrite as attributed belief. "
+        "Do NOT reject for vagueness.\n"
+        "- Ephemeral/temporal content → rewrite to preserve the temporal context: "
+        "'As of [time], user reported X.' Set memory_type=observation.\n"
+        "- User intent or to-do → rewrite as 'The user intends/wants X.' "
+        "Set memory_type=preference.\n"
+        "- Obvious canonical facts (sky is blue, water is wet) → store at confidence 0.9 as "
+        "baseline reference. They anchor belief-deviation detection: when users claim otherwise, "
+        "the contrast is meaningful.\n"
+        "- Questions from users → rewrite as 'The user is inquiring about X.' "
+        "Set memory_type=observation, confidence 0.5.\n"
+        "- Architectural decisions, policies, tech constraints → store as-is at full confidence.\n"
+        "- Relationship respect: if reconciler says duplicate/reinforcement → reinforce_existing.\n"
+        "- If reconciler says refinement → refine_existing.\n"
+        "- If reconciler says conflict/opinion_change → mark_conflict or supersede_existing.\n"
+        "- Always rewrite final_memory_text into a clean, self-contained statement. "
+        "Never use 'I', 'we', 'today', or session-internal references.\n\n"
         "Allowed decisions:\n"
         "  commit | refine_existing | supersede_existing | "
         "reinforce_existing | mark_conflict | propose_for_review | reject\n\n"
         "Allowed rejection_reason (only when decision=reject):\n"
-        "  too_vague | duplicate | sensitive | temporary | obvious | incoherent\n\n"
+        "  sensitive | incoherent\n\n"
         "Return ONLY this JSON — no markdown fences:\n"
         "{\n"
         '  "decision": "<decision>",\n'
@@ -187,8 +207,22 @@ def _build_critic_prompt(
         '  "confidence": <0.0-1.0>,\n'
         '  "critic_notes": ["<note>"],\n'
         '  "context_summary": "<1-2 sentences: when and why this fact is relevant>",\n'
-        '  "rejection_reason": null\n'
-        "}"
+        '  "rejection_reason": null,\n'
+        '  "novelty_score": <0.0-1.0>,\n'
+        '  "interest_flag": <true|false>,\n'
+        '  "suggested_visibility": "public" | "private"\n'
+        "}\n\n"
+        "novelty_score: how unusual, counterintuitive, or potentially important is this idea "
+        "beyond its immediate context? 0=mundane/common, 1=highly novel or paradigm-challenging. "
+        "interest_flag: set true only when novelty_score >= 0.75.\n\n"
+        "suggested_visibility rules (STRICT):\n"
+        '  "private" — content contains ANY of: passwords, API keys, tokens, credentials, '
+        "personal health/medical info, home addresses, private financial details, "
+        "identifiable personal data about a named individual, internal secrets.\n"
+        '  "public" — everything else: facts, decisions, opinions, architectural choices, '
+        "general knowledge, beliefs about the world, project patterns, observations about tools or models.\n"
+        "When in doubt, prefer public. The caller's requested visibility is overridden only when "
+        "you detect genuinely sensitive content that must stay private."
     )
 
 
@@ -339,6 +373,15 @@ def _apply_risk_gate(
     return "propose_for_review", "proposed"
 
 
+# ── Visibility resolver ───────────────────────────────────────────────────────
+
+def _effective_visibility(caller_visibility: str, critic: dict) -> str:
+    """Critic can force private for sensitive content; otherwise caller wins."""
+    if critic.get("suggested_visibility") == "private":
+        return "private"
+    return caller_visibility or "private"
+
+
 # ── Pipeline class ────────────────────────────────────────────────────────────
 
 class MemoryCommitPipeline:
@@ -353,10 +396,13 @@ class MemoryCommitPipeline:
 
     def __init__(
         self,
-        store: MemoryStore | None = None,
+        store: "MemoryStore | _SQLiteStore | None" = None,
         llm: LLMProvider | None = None,
     ) -> None:
-        self.store = store or MemoryStore()
+        if store is None:
+            from app.db import get_store
+            store = get_store()
+        self.store = store
         self.llm = llm or get_llm_client()
         self._reconciler = CandidateReconciler(store=self.store, ollama=self.llm)
 
@@ -365,6 +411,8 @@ class MemoryCommitPipeline:
         candidate: dict[str, Any],
         source_key: str = "local_user",
         source_type: str = "local",
+        source_user_id: str | None = None,
+        visibility: str = "private",
     ) -> CommitDecision:
         """Run a candidate through the full commit pipeline.
 
@@ -436,11 +484,14 @@ class MemoryCommitPipeline:
             reconciler_relationship=reconciler_rel,
             reconciler_reason=reconciler_reason,
             related_atoms=related_memories,
+            reframe_hint=candidate.get("reframe_hint"),
+            suggested_memory_type=candidate.get("suggested_memory_type"),
         )
         try:
             critic_raw = self.llm.generate_response(
                 critic_prompt,
                 system=_CRITIC_SYSTEM,
+                json_mode=True,
             )
             critic = _parse_critic_response(
                 critic_raw, content, memory_type, scope, confidence
@@ -500,9 +551,20 @@ class MemoryCommitPipeline:
                 duplicate_ids = [ex_id]
                 matched_ids = [ex_id]
             else:
+                # For model-scoped atoms, the caller supplies a precise injection
+                # directive as context_summary. The critic rewrites it to a generic
+                # description ("This observation is relevant for...") which is useless
+                # for prompt injection. Prefer the candidate's provided context_summary
+                # when the scope is model:* and a context_summary was explicitly supplied.
+                incoming_context_summary = candidate.get("context_summary", "")
+                is_model_scope = bool(scope and str(scope).startswith("model:"))
+                if is_model_scope and incoming_context_summary and incoming_context_summary.strip():
+                    effective_context_summary = incoming_context_summary.strip()
+                else:
+                    effective_context_summary = critic.get("context_summary") or final_text
                 atom_id, signal_id = self.store.store_memory_with_signal(
                     content=final_text,
-                    context_summary=critic.get("context_summary") or final_text,
+                    context_summary=effective_context_summary,
                     memory_type=final_type,
                     scope=final_scope,
                     confidence=max(0.0, min(1.0, final_conf)),
@@ -519,9 +581,48 @@ class MemoryCommitPipeline:
                         and effective_source_key.startswith("http")
                         else None
                     ),
+                    source_user_id=source_user_id,
+                    visibility=_effective_visibility(visibility, critic),
                 )
                 committed_atom_id = atom_id
                 committed_signal_id = signal_id
+                # Write novelty fields from critic output
+                _novelty = float(critic.get("novelty_score") or 0.0)
+                _interest = bool(critic.get("interest_flag") or (_novelty >= 0.75))
+                if _novelty > 0 or _interest:
+                    try:
+                        import psycopg as _pg
+                        _cfg = self.store._cfg if hasattr(self.store, "_cfg") else None
+                        _db_url = (
+                            _cfg.database_url
+                            if _cfg
+                            else __import__("os").environ.get("DATABASE_URL", "")
+                        )
+                        with _pg.connect(_db_url) as _conn:
+                            with _conn.cursor() as _cur:
+                                _cur.execute(
+                                    "UPDATE memory_atoms SET novelty_score=%s, interest_flag=%s WHERE id=%s;",
+                                    (_novelty, _interest, committed_atom_id),
+                                )
+                            _conn.commit()
+                    except Exception:
+                        pass  # non-fatal
+                # Auto-link to highly similar neighbors (cosine > 0.85).
+                # Builds the knowledge graph organically without manual calls.
+                _AUTO_LINK_THRESHOLD = 0.85
+                for neighbor in related_memories:
+                    neighbor_sim = float(neighbor.get("similarity", 0.0))
+                    neighbor_id = str(neighbor.get("id") or "")
+                    if neighbor_id and neighbor_sim >= _AUTO_LINK_THRESHOLD:
+                        try:
+                            self.store.link_atoms(
+                                atom_a_id=committed_atom_id,
+                                atom_b_id=neighbor_id,
+                                relation_type="related",
+                                confidence=round(neighbor_sim, 3),
+                            )
+                        except Exception:
+                            pass  # non-fatal
                 if rel_for_store == "refinement" and matched_ids:
                     for old_id in matched_ids:
                         try:
@@ -554,28 +655,57 @@ class MemoryCommitPipeline:
                     reconciliation_reason=reconciler_reason,
                     source_key=effective_source_key,
                     source_type=effective_source_type,
+                    source_user_id=source_user_id,
                 )
             except Exception:
                 pass  # non-fatal; trace still written
 
         elif final_decision in ("mark_conflict", "propose_for_review"):
-            proposal_rel = (
+            signal_rel = (
                 reconciler_rel
                 if reconciler_rel in ("conflict", "opinion_change")
                 else ("conflict" if final_decision == "mark_conflict" else "refinement")
             )
-            proposal_id = self.store.store_proposal(
-                content=final_text,
-                memory_type=final_type,
-                relationship=proposal_rel,
-                context_summary=critic.get("context_summary") or final_text,
-                scope=final_scope,
-                confidence=max(0.0, min(1.0, final_conf)),
-                importance=importance,
-                reconciliation_reason=reconciler_reason,
-                matched_memory_ids=matched_ids or [],
-            )
-            conflicts_ids = list(matched_ids)
+            if matched_ids:
+                # Route through signal math: add opposition signal to existing atom
+                # and let recompute_atom_weights update disagreement_score + confidence.
+                # This replaces the human-reviewed proposal queue entirely.
+                try:
+                    self.store.add_signal_to_atom(
+                        atom_id=matched_ids[0],
+                        content=final_text,
+                        relationship=signal_rel,
+                        context_summary=critic.get("context_summary") or final_text,
+                        memory_type=final_type,
+                        scope=final_scope,
+                        confidence=max(0.0, min(1.0, final_conf)),
+                        importance=importance,
+                        reconciliation_reason=reconciler_reason,
+                        source_key=effective_source_key,
+                        source_type=effective_source_type,
+                        source_user_id=source_user_id,
+                    )
+                    conflicts_ids = list(matched_ids)
+                except Exception:
+                    pass  # non-fatal; conflict recorded in trace
+            else:
+                # No existing atom to conflict with — commit as new
+                atom_id, signal_id = self.store.store_memory_with_signal(
+                    content=final_text,
+                    context_summary=critic.get("context_summary") or final_text,
+                    memory_type=final_type,
+                    scope=final_scope,
+                    confidence=max(0.0, min(1.0, final_conf)),
+                    importance=importance,
+                    relationship="new",
+                    reconciliation_reason=reconciler_reason,
+                    source_key=effective_source_key,
+                    source_type=effective_source_type,
+                    source_user_id=source_user_id,
+                    visibility=visibility,
+                )
+                committed_atom_id = atom_id
+                committed_signal_id = signal_id
         # ── Belief revision log ────────────────────────────────────────────────
         # Write an immutable revision entry for every event on a revisable type.
         # Failures are non-fatal — the commit itself is already written.

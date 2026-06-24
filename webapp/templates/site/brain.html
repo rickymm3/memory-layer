@@ -1,0 +1,84 @@
+{% extends "site/base.html" %}
+{% block title %}My Brain — Synapse{% endblock %}
+{% block page_class %}page-wide{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap">
+  <div>
+    <h1 style="font-size:1.3rem;font-weight:700;letter-spacing:-.02em">{{ current_user.username }}'s Brain</h1>
+    <p style="color:var(--muted);font-size:.83rem;margin-top:.2rem">{{ stats.total }} active memories</p>
+  </div>
+  <div style="margin-left:auto;display:flex;gap:.5rem">
+    <a href="{{ url_for('webapp.capture') }}" class="btn btn-primary btn-sm">+ Capture thought</a>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem;margin-bottom:1.75rem">
+  {% for label, val, color in [('Total', stats.total, 'var(--text)'), ('Facts', stats.facts, 'var(--green)'), ('Decisions', stats.decisions, 'var(--accent)'), ('Contested', stats.contested, 'var(--red)')] %}
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:.85rem 1rem;text-align:center">
+    <div style="font-size:1.6rem;font-weight:700;color:{{ color }}">{{ val }}</div>
+    <div style="font-size:.75rem;color:var(--muted);margin-top:.15rem">{{ label }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if atoms %}
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+    <table>
+      <thead>
+        <tr>
+          <th>Memory</th>
+          <th style="width:100px">Type</th>
+          <th style="width:70px">Conf</th>
+          <th style="width:85px">Date</th>
+          <th style="width:95px">Visible to</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for atom in atoms %}
+        <tr>
+          <td style="max-width:500px">
+            <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:500px;font-size:.875rem" title="{{ atom.content }}">
+              {{ atom.content }}
+            </span>
+            {% if atom.contested %}<span class="badge" style="background:rgba(248,113,113,.1);color:var(--red);border:1px solid rgba(248,113,113,.2);margin-top:.2rem">contested</span>{% endif %}
+          </td>
+          <td>
+            <span class="badge badge-{{ atom.memory_type }}">{{ atom.memory_type }}</span>
+          </td>
+          <td>
+            <span class="{% if atom.confidence >= 0.7 %}conf-high{% elif atom.confidence >= 0.4 %}conf-mid{% else %}conf-low{% endif %}" style="font-weight:600;font-size:.85rem">
+              {{ "%.0f%%" | format(atom.confidence * 100) }}
+            </span>
+          </td>
+          <td style="font-size:.78rem;color:var(--muted)">{{ atom.created_at }}</td>
+          <td>
+            <form method="post" action="{{ url_for('webapp.toggle_visibility', atom_id=atom.id) }}" style="margin:0">
+              {% if atom.visibility == 'public' %}
+                <input type="hidden" name="visibility" value="private">
+                <button type="submit" class="vis-btn vis-public">🌐 public</button>
+              {% else %}
+                <input type="hidden" name="visibility" value="public">
+                <button type="submit" class="vis-btn vis-private">🔒 private</button>
+              {% endif %}
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if stats.total > 50 %}
+  <p style="font-size:.78rem;color:var(--muted);margin-top:.6rem">Showing 50 of {{ stats.total }} memories, sorted by importance.</p>
+  {% endif %}
+{% else %}
+  <div class="empty" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)">
+    <h3>Your brain is empty</h3>
+    <p style="margin:.5rem 0 1.25rem">Capture your first thought, or connect an AI client to build your memory automatically.</p>
+    <div style="display:flex;gap:.75rem;justify-content:center;flex-wrap:wrap">
+      <a href="{{ url_for('webapp.capture') }}" class="btn btn-primary">Capture a thought</a>
+      <a href="{{ url_for('webapp.settings') }}" class="btn btn-ghost">Connect AI client</a>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

@@ -50,6 +50,12 @@
       </strong>
     </div>
     <div>
+      <small>Unique sources</small><br>
+      <strong class="{% if atom.unique_source_count >= 3 %}conf-high{% elif atom.unique_source_count >= 2 %}conf-mid{% endif %}" title="How many distinct users have written signals for this atom">
+        {{ atom.unique_source_count }}
+      </strong>
+    </div>
+    <div>
       <small>Support weight</small><br>
       <strong class="conf-high">{{ atom.support_weight }}</strong>
       <div style="width:80px;height:5px;background:#e5e7eb;border-radius:3px;margin-top:4px">

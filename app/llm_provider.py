@@ -18,7 +18,7 @@ class LLMProvider(Protocol):
     """
 
     def embed_text(self, text: str) -> list[float]: ...
-    def generate_response(self, prompt: str, system: str | None = None) -> str: ...
+    def generate_response(self, prompt: str, system: str | None = None, json_mode: bool = False) -> str: ...
 
 
 class AnthropicClient:
@@ -55,7 +55,7 @@ class AnthropicClient:
             "Set EMBEDDING_PROVIDER=openai or EMBEDDING_PROVIDER=ollama."
         )
 
-    def generate_response(self, prompt: str, system: str | None = None) -> str:
+    def generate_response(self, prompt: str, system: str | None = None, json_mode: bool = False) -> str:
         body: dict = {
             "model": self.chat_model,
             "max_tokens": self.max_tokens,
@@ -63,6 +63,7 @@ class AnthropicClient:
         }
         if system:
             body["system"] = system
+        # Anthropic follows JSON instructions from the system prompt natively; no API flag needed.
         response = requests.post(
             self._API_URL,
             headers={
@@ -131,15 +132,18 @@ class OpenAICompatibleClient:
             )
         return items[0]["embedding"]
 
-    def generate_response(self, prompt: str, system: str | None = None) -> str:
+    def generate_response(self, prompt: str, system: str | None = None, json_mode: bool = False) -> str:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
+        body: dict = {"model": self.chat_model, "messages": messages, "stream": False}
+        if json_mode:
+            body["response_format"] = {"type": "json_object"}
         response = requests.post(
             f"{self.base_url}/v1/chat/completions",
             headers=self._headers(),
-            json={"model": self.chat_model, "messages": messages, "stream": False},
+            json=body,
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()

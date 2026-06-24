@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Knowledge Graph — Synapse</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:     #0a0d14;
+      --text:   #e2e6f0;
+      --muted:  #7b82a0;
+      --accent: #6c8cf5;
+      --novel:  #a78bfa;
+      --green:  #34d399;
+      --border: #1e2233;
+    }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); font-family: 'Inter', system-ui, sans-serif; color: var(--text); }
+
+    /* ── NAV BAR ── */
+    .topbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      height: 48px; background: rgba(10,13,20,.85); backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; padding: 0 1.25rem; gap: 1rem;
+    }
+    .topbar-brand { font-weight: 700; font-size: 1rem; color: var(--text); letter-spacing: -.02em; }
+    .topbar-brand span { color: var(--accent); }
+    .topbar-back { font-size: .82rem; color: var(--muted); text-decoration: none; }
+    .topbar-back:hover { color: var(--text); }
+    .topbar-count { font-size: .78rem; color: var(--muted); margin-left: auto; }
+
+    /* ── CANVAS ── */
+    #graph-canvas { position: fixed; top: 48px; left: 0; right: 0; bottom: 0; }
+
+    /* ── TOOLTIP ── */
+    #tooltip {
+      position: fixed; pointer-events: none; z-index: 200;
+      background: rgba(18,22,36,.96); border: 1px solid #2a3050;
+      border-radius: 8px; padding: .75rem 1rem; max-width: 280px;
+      box-shadow: 0 8px 32px rgba(0,0,0,.5);
+      opacity: 0; transition: opacity .15s;
+    }
+    #tooltip.visible { opacity: 1; }
+    #tooltip .tt-title { font-weight: 600; font-size: .9rem; line-height: 1.35; margin-bottom: .35rem; }
+    #tooltip .tt-meta  { font-size: .75rem; color: var(--muted); display: flex; gap: .6rem; flex-wrap: wrap; }
+    #tooltip .tt-novel { color: var(--novel); font-weight: 600; }
+    #tooltip .tt-hint  { font-size: .72rem; color: #4b5280; margin-top: .4rem; }
+
+    /* ── LEGEND ── */
+    .legend {
+      position: fixed; bottom: 1.25rem; left: 1.25rem; z-index: 100;
+      background: rgba(10,13,20,.8); border: 1px solid var(--border);
+      border-radius: 8px; padding: .65rem .9rem; font-size: .75rem; color: var(--muted);
+      display: flex; flex-direction: column; gap: .35rem;
+    }
+    .legend-row { display: flex; align-items: center; gap: .5rem; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+    /* ── CONTROLS ── */
+    .controls {
+      position: fixed; bottom: 1.25rem; right: 1.25rem; z-index: 100;
+      display: flex; flex-direction: column; gap: .4rem;
+    }
+    .ctrl-btn {
+      width: 32px; height: 32px; border-radius: 6px; border: 1px solid var(--border);
+      background: rgba(10,13,20,.8); color: var(--muted); cursor: pointer;
+      font-size: 1rem; display: flex; align-items: center; justify-content: center;
+      transition: color .15s, border-color .15s;
+    }
+    .ctrl-btn:hover { color: var(--text); border-color: #3a4060; }
+
+    /* ── LOADING ── */
+    #loading {
+      position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: var(--bg); z-index: 300; flex-direction: column; gap: 1rem;
+    }
+    .spinner { width: 32px; height: 32px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading p { font-size: .85rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <a href="{{ url_for('webapp.discussions') }}" class="topbar-back">← List</a>
+  <span class="topbar-brand">Syn<span>apse</span> / Knowledge Graph</span>
+  <span class="topbar-count" id="node-count"></span>
+</div>
+
+<canvas id="graph-canvas"></canvas>
+
+<div id="tooltip">
+  <div class="tt-title" id="tt-title"></div>
+  <div class="tt-meta" id="tt-meta"></div>
+  <div class="tt-hint">Click to open discussion</div>
+</div>
+
+<div class="legend">
+  <div class="legend-row"><div class="legend-dot" style="background:#a78bfa;box-shadow:0 0 6px #a78bfa88"></div> Novel idea</div>
+  <div class="legend-row"><div class="legend-dot" style="background:#6c8cf5;box-shadow:0 0 6px #6c8cf588"></div> Discussion</div>
+  <div class="legend-row"><div class="legend-dot" style="background:#34d399;box-shadow:0 0 4px #34d39988"></div> Active (24h)</div>
+  <div style="color:#4b5280;margin-top:.2rem;font-size:.7rem">Node size = idea count</div>
+</div>
+
+<div class="controls">
+  <button class="ctrl-btn" id="btn-zoom-in" title="Zoom in">+</button>
+  <button class="ctrl-btn" id="btn-zoom-out" title="Zoom out">−</button>
+  <button class="ctrl-btn" id="btn-reset" title="Reset view" style="font-size:.75rem">⌂</button>
+</div>
+
+<div id="loading"><div class="spinner"></div><p>Building knowledge graph…</p></div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script>
+(async () => {
+  const canvas  = document.getElementById('graph-canvas');
+  const ctx     = canvas.getContext('2d');
+  const tooltip = document.getElementById('tooltip');
+  const ttTitle = document.getElementById('tt-title');
+  const ttMeta  = document.getElementById('tt-meta');
+
+  // ── Sizing ──────────────────────────────────────────────────────────────────
+  function resize() {
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight - 48;
+  }
+  resize();
+  window.addEventListener('resize', () => { resize(); simulation.alpha(0.1).restart(); draw(); });
+
+  // ── Load data ───────────────────────────────────────────────────────────────
+  const data = await fetch('{{ url_for("webapp.api_graph") }}').then(r => r.json());
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('node-count').textContent =
+    `${data.nodes.length} discussion${data.nodes.length !== 1 ? 's' : ''} · ${data.links.length} connection${data.links.length !== 1 ? 's' : ''}`;
+
+  if (!data.nodes.length) {
+    ctx.fillStyle = '#7b82a0';
+    ctx.font = '16px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No discussions yet. Capture some thoughts to build your knowledge graph.', canvas.width / 2, canvas.height / 2);
+    return;
+  }
+
+  // ── State ───────────────────────────────────────────────────────────────────
+  let transform = d3.zoomIdentity;
+  let hoveredNode = null;
+
+  // ── Node radii ───────────────────────────────────────────────────────────────
+  const maxAtoms = Math.max(...data.nodes.map(n => n.atom_count), 1);
+  function radius(n) { return 6 + (n.atom_count / maxAtoms) * 18; }
+
+  // Node color
+  function nodeColor(n, alpha = 1) {
+    if (n.novelty_flag) return `rgba(167,139,250,${alpha})`;
+    const age = Date.now() - new Date(n.last_activity).getTime();
+    if (age < 86400000) return `rgba(52,211,153,${alpha})`; // last 24h = green
+    return `rgba(108,140,245,${alpha})`;
+  }
+
+  // ── Force simulation ────────────────────────────────────────────────────────
+  const simulation = d3.forceSimulation(data.nodes)
+    .force('link', d3.forceLink(data.links).id(d => d.id).distance(d => 80).strength(0.4))
+    .force('charge', d3.forceManyBody().strength(-220))
+    .force('center', d3.forceCenter(canvas.width / 2, canvas.height / 2))
+    .force('collide', d3.forceCollide().radius(d => radius(d) + 12))
+    .on('tick', draw);
+
+  // ── Draw ─────────────────────────────────────────────────────────────────────
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(transform.x, transform.y);
+    ctx.scale(transform.k, transform.k);
+
+    const connectedIds = hoveredNode
+      ? new Set(data.links.flatMap(l =>
+          (l.source.id === hoveredNode.id || l.target.id === hoveredNode.id)
+            ? [l.source.id, l.target.id] : []))
+      : null;
+
+    // ── Draw links ──
+    data.links.forEach(link => {
+      const s = link.source, t = link.target;
+      const isHot = hoveredNode && (s.id === hoveredNode.id || t.id === hoveredNode.id);
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(t.x, t.y);
+      ctx.strokeStyle = isHot ? 'rgba(108,140,245,0.55)' : 'rgba(108,140,245,0.12)';
+      ctx.lineWidth = isHot ? 1.5 : 0.8;
+      ctx.stroke();
+    });
+
+    // ── Draw nodes ──
+    data.nodes.forEach(node => {
+      const r = radius(node);
+      const dimmed = hoveredNode && !connectedIds.has(node.id) && node.id !== hoveredNode.id;
+      const isHovered = node === hoveredNode;
+
+      // Glow
+      if (isHovered || node.novelty_flag) {
+        const grd = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, r * 2.5);
+        grd.addColorStop(0, nodeColor(node, isHovered ? 0.35 : 0.18));
+        grd.addColorStop(1, nodeColor(node, 0));
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, r * 2.5, 0, 2 * Math.PI);
+        ctx.fillStyle = grd;
+        ctx.fill();
+      }
+
+      // Core circle
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
+      ctx.fillStyle = nodeColor(node, dimmed ? 0.2 : 0.9);
+      ctx.fill();
+
+      // Ring
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
+      ctx.strokeStyle = nodeColor(node, dimmed ? 0.1 : 0.5);
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Label — always show for large/hovered nodes
+      const showLabel = isHovered || r > 14 || transform.k > 1.4;
+      if (showLabel) {
+        const fontSize = Math.max(9, Math.min(13, 8 + r * 0.35)) / transform.k * transform.k;
+        ctx.font = `${isHovered ? 600 : 400} ${fontSize}px Inter, sans-serif`;
+        ctx.fillStyle = dimmed ? 'rgba(123,130,160,0.3)' : 'rgba(226,230,240,0.88)';
+        ctx.textAlign = 'center';
+        const label = node.title.length > 32 ? node.title.slice(0, 30) + '…' : node.title;
+        ctx.fillText(label, node.x, node.y + r + 13 / transform.k);
+      }
+    });
+
+    ctx.restore();
+  }
+
+  // ── Zoom ─────────────────────────────────────────────────────────────────────
+  const zoom = d3.zoom()
+    .scaleExtent([0.2, 4])
+    .on('zoom', e => { transform = e.transform; draw(); });
+
+  d3.select(canvas).call(zoom);
+
+  document.getElementById('btn-zoom-in').onclick  = () => d3.select(canvas).transition().call(zoom.scaleBy, 1.4);
+  document.getElementById('btn-zoom-out').onclick = () => d3.select(canvas).transition().call(zoom.scaleBy, 0.7);
+  document.getElementById('btn-reset').onclick    = () => d3.select(canvas).transition().call(zoom.transform, d3.zoomIdentity.translate(canvas.width/2, canvas.height/2).scale(1).translate(-canvas.width/2, -canvas.height/2));
+
+  // ── Mouse interaction ────────────────────────────────────────────────────────
+  function findNode(ex, ey) {
+    const [mx, my] = transform.invert([ex, ey - 48]);
+    for (const n of data.nodes) {
+      const dx = n.x - mx, dy = n.y - my;
+      if (Math.sqrt(dx*dx + dy*dy) < radius(n) + 6) return n;
+    }
+    return null;
+  }
+
+  canvas.addEventListener('mousemove', e => {
+    const node = findNode(e.clientX, e.clientY);
+    if (node !== hoveredNode) { hoveredNode = node; draw(); }
+    if (node) {
+      ttTitle.textContent = node.title;
+      ttMeta.innerHTML =
+        (node.novelty_flag ? '<span class="tt-novel">★ novel</span>' : '') +
+        `<span>${node.contributor_count} contributor${node.contributor_count !== 1 ? 's' : ''}</span>` +
+        `<span>${node.atom_count} idea${node.atom_count !== 1 ? 's' : ''}</span>` +
+        `<span>${node.last_activity}</span>`;
+      const tx = e.clientX + 16, ty = e.clientY + 16;
+      tooltip.style.left = Math.min(tx, window.innerWidth - 300) + 'px';
+      tooltip.style.top  = Math.min(ty, window.innerHeight - 120) + 'px';
+      tooltip.classList.add('visible');
+      canvas.style.cursor = 'pointer';
+    } else {
+      tooltip.classList.remove('visible');
+      canvas.style.cursor = 'default';
+    }
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    hoveredNode = null; draw();
+    tooltip.classList.remove('visible');
+  });
+
+  canvas.addEventListener('click', e => {
+    const node = findNode(e.clientX, e.clientY);
+    if (node) window.location.href = `/discussion/${node.id}`;
+  });
+
+  // ── Drag ────────────────────────────────────────────────────────────────────
+  d3.select(canvas).call(
+    d3.drag()
+      .subject(e => {
+        const [mx, my] = transform.invert([e.x, e.y - 48]);
+        for (const n of data.nodes) {
+          const dx = n.x - mx, dy = n.y - my;
+          if (Math.sqrt(dx*dx+dy*dy) < radius(n) + 6) return n;
+        }
+        return null;
+      })
+      .on('start', (e, d) => { if (!d) return; if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag',  (e, d) => { if (!d) return; const [mx, my] = transform.invert([e.x, e.y - 48]); d.fx = mx; d.fy = my; })
+      .on('end',   (e, d) => { if (!d) return; if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+  );
+
+  draw();
+})();
+</script>
+</body>
+</html>

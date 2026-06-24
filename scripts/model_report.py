@@ -75,7 +75,7 @@ def main() -> int:
 
     rows = conn.execute(
         f"""
-        SELECT id, scope, content, memory_type,
+        SELECT id, scope, content, context_summary, memory_type,
                confidence, importance, lifecycle_status, created_at
         FROM memory_atoms
         WHERE 1=1
@@ -94,13 +94,14 @@ def main() -> int:
 
     # Group by scope then category
     by_scope: dict[str, dict[str, list]] = {}
-    for atom_id, scope, content, mtype, confidence, importance, status, created_at in rows:
+    for atom_id, scope, content, ctx_summary, mtype, confidence, importance, status, created_at in rows:
         by_scope.setdefault(scope, {cat: [] for cat in _CATEGORY_ORDER})
         cat = _CATEGORY.get(mtype or "", "General")
         by_scope[scope][cat].append(
             {
                 "id": atom_id,
                 "content": content,
+                "context_summary": ctx_summary,
                 "memory_type": mtype,
                 "confidence": confidence,
                 "importance": importance,
@@ -147,6 +148,9 @@ def main() -> int:
                         line += word + " "
                 if line.strip():
                     print(line)
+                # Show injection string if present and differs from content
+                if a.get("context_summary") and a["context_summary"] != a["content"]:
+                    print(f"    INJECT → {a['context_summary']}")
                 print(
                     f"    conf={_format_float(a['confidence'])}  "
                     f"imp={_format_float(a['importance'])}"

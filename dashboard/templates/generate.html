@@ -21,9 +21,16 @@
       <label>
         Size
         <select name="size">
-          <option value="1024x1024">1024 × 1024 — Square</option>
-          <option value="1792x1024">1792 × 1024 — Landscape</option>
-          <option value="1024x1792">1024 × 1792 — Portrait</option>
+          <optgroup label="Local (ComfyUI safe)">
+            <option value="768x768">768 × 768 — Square</option>
+            <option value="768x576">768 × 576 — Landscape</option>
+            <option value="576x768">576 × 768 — Portrait</option>
+          </optgroup>
+          <optgroup label="Cloud (DALL-E / Replicate)">
+            <option value="1024x1024">1024 × 1024 — Square</option>
+            <option value="1792x1024">1792 × 1024 — Landscape</option>
+            <option value="1024x1792">1024 × 1792 — Portrait</option>
+          </optgroup>
         </select>
       </label>
       <button type="submit" {% if not image_available %}disabled{% endif %}>

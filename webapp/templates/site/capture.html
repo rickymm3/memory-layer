@@ -1,0 +1,45 @@
+{% extends "site/base.html" %}
+{% block title %}Capture a Thought — Synapse{% endblock %}
+
+{% block content %}
+<div style="max-width:620px;margin:0 auto">
+  <div style="margin-bottom:1.5rem">
+    <a href="{{ url_for('webapp.brain') }}" style="font-size:.82rem;color:var(--muted)">← Brain</a>
+  </div>
+
+  <div class="page-header">
+    <h1>Capture a thought</h1>
+    <p>Write anything — an opinion, a fact, a question, a decision. The system classifies and stores it.</p>
+  </div>
+
+  <form method="post" action="{{ url_for('webapp.capture') }}">
+    <div class="field">
+      <label>Your idea</label>
+      <textarea name="content" rows="5" required
+        placeholder="e.g. Cyclic cosmology models suggest the Big Bang may not have been a true beginning — the universe may have existed in prior forms before the current expansion phase."
+      ></textarea>
+    </div>
+
+    <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.25rem;align-items:flex-end">
+      <div class="field" style="margin:0;flex:1;min-width:140px">
+        <label>Type</label>
+        <select name="memory_type">
+          {% for t in ['observation','fact','opinion','decision','question','instruction','preference'] %}
+            <option value="{{ t }}" {% if t == 'observation' %}selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:.5rem;padding-bottom:.1rem">
+        <input type="checkbox" name="make_private" value="1" id="make_private"
+               style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent)">
+        <label for="make_private" style="font-size:.85rem;cursor:pointer;color:var(--muted)">
+          Keep private — only visible to me
+        </label>
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Save to brain</button>
+  </form>
+</div>
+{% endblock %}

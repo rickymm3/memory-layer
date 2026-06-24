@@ -32,10 +32,12 @@ class OllamaClient:
             raise RuntimeError("Ollama embed response missing embeddings[0]")
         return embeddings[0]
 
-    def generate_response(self, prompt: str, system: str | None = None) -> str:
+    def generate_response(self, prompt: str, system: str | None = None, json_mode: bool = False) -> str:
         payload = {"model": self.chat_model, "prompt": prompt, "stream": False}
         if system:
             payload["system"] = system
+        if json_mode:
+            payload["format"] = "json"
         response = requests.post(
             f"{self.base_url}/api/generate",
             json=payload,

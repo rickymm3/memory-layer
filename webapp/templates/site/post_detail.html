@@ -1,0 +1,81 @@
+{% extends "site/base.html" %}
+{% block title %}{{ post.title }} — memoryLayer{% endblock %}
+
+{% block head %}
+<style>
+  .post-body { line-height: 1.7; }
+  .post-body h1, .post-body h2, .post-body h3 { margin-top: 1.5rem; }
+  .post-body pre { background: var(--pico-muted-background); padding: 1rem; border-radius: .4rem; overflow-x: auto; }
+  .post-body code { background: var(--pico-muted-background); padding: .1em .3em; border-radius: .2em; font-size: .88em; }
+  .contributor-chip {
+    display: inline-flex; align-items: center; gap: .35rem;
+    background: var(--pico-muted-background);
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 2rem; padding: .2rem .6rem;
+    font-size: .8rem;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="margin-bottom:1rem">
+  <a href="{{ url_for('webapp.feed') }}" style="font-size:.85rem;color:var(--pico-muted-color)">← Feed</a>
+</div>
+
+<header style="margin-bottom:2rem">
+  <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem">
+    <span class="badge">{{ post.format.replace('_',' ') }}</span>
+    {% if post.status == 'draft' %}
+      <span class="badge" style="background:#fef9c3;color:#854d0e">draft</span>
+    {% endif %}
+  </div>
+  <h1 style="font-size:1.8rem;margin:.25rem 0 .5rem">{{ post.title }}</h1>
+  <div style="font-size:.85rem;color:var(--pico-muted-color);display:flex;gap:1rem;flex-wrap:wrap">
+    <span>by {{ post.author }}</span>
+    {% if post.published_at %}<span>{{ post.published_at }}</span>{% endif %}
+    {% if post.confidence %}<span>{{ "%.0f%%" | format(post.confidence * 100) }} confidence</span>{% endif %}
+  </div>
+  {% if post.topic_tags %}
+    <div style="margin-top:.6rem;display:flex;gap:.4rem;flex-wrap:wrap">
+      {% for tag in post.topic_tags %}
+        <a href="{{ url_for('webapp.feed', tag=tag) }}"
+           style="font-size:.78rem;color:var(--pico-muted-color);text-decoration:none">#{{ tag }}</a>
+      {% endfor %}
+    </div>
+  {% endif %}
+</header>
+
+<div class="post-body">{{ post.body | safe }}</div>
+
+{% if contributors %}
+  <hr style="margin:2rem 0">
+  <section>
+    <h3 style="font-size:.9rem;font-weight:700;margin-bottom:.75rem;color:var(--pico-muted-color)">CONTRIBUTORS</h3>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+      {% for c in contributors %}
+        <span class="contributor-chip">
+          <span>{{ c.username }}</span>
+          <span style="color:var(--pico-muted-color);font-size:.72em">{{ c.type }}</span>
+        </span>
+      {% endfor %}
+    </div>
+  </section>
+{% endif %}
+
+{% if current_user.is_authenticated and post.author == current_user.username and post.status == 'draft' %}
+  <hr style="margin:2rem 0">
+  <div style="display:flex;gap:.75rem">
+    <form method="post" action="{{ url_for('webapp.publish_post', post_id=post.id) }}">
+      <button type="submit" style="background:var(--pico-primary);color:#fff;border:none;padding:.5rem 1.2rem;border-radius:.4rem;cursor:pointer;font-weight:600">
+        Publish
+      </button>
+    </form>
+    <form method="post" action="{{ url_for('webapp.discard_post', post_id=post.id) }}"
+          onsubmit="return confirm('Discard this draft?')">
+      <button type="submit" style="background:none;border:1px solid var(--pico-muted-border-color);padding:.5rem 1rem;border-radius:.4rem;cursor:pointer">
+        Discard
+      </button>
+    </form>
+  </div>
+{% endif %}
+{% endblock %}

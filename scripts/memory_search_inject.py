@@ -98,6 +98,9 @@ def main() -> None:
 
     vec_str = "[" + ",".join(str(x) for x in embedding) + "]"
 
+    # ── Model-scope from env ───────────────────────────────────────────────────
+    model_scope = os.environ.get("MEMORY_MODEL_SCOPE", "model:claude-sonnet-4-6")
+
     try:
         import psycopg
         with psycopg.connect(database_url, connect_timeout=3) as conn:
@@ -134,6 +137,20 @@ def main() -> None:
                     (vec_str, vec_str, HIST_LIMIT),
                 )
                 hist_rows = cur.fetchall()
+
+            # Model lessons — always inject active model-scope atoms by importance
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COALESCE(context_summary, content), memory_type, confidence
+                    FROM memory_atoms
+                    WHERE scope = %s AND lifecycle_status = 'active'
+                    ORDER BY importance DESC, confidence DESC
+                    LIMIT 5
+                    """,
+                    (model_scope,),
+                )
+                model_rows = cur.fetchall()
 
     except Exception:
         sys.exit(0)
@@ -180,10 +197,26 @@ def main() -> None:
             f"[{mtype}|{status} as of {updated_str}, peak conf:{float(peak_conf):.2f}] {content}"
         )
 
-    if not current_lines and not hist_lines:
+    # Model lessons — compact injection strings
+    model_lines: list[str] = []
+    model_budget = 0
+    MODEL_TOKEN_BUDGET = 300
+    for injection_text, mtype, conf in model_rows:
+        if not injection_text:
+            continue
+        cost = _tokens(injection_text)
+        if model_budget + cost > MODEL_TOKEN_BUDGET:
+            break
+        model_budget += cost
+        model_lines.append(f"[{mtype}] {injection_text}")
+
+    if not current_lines and not hist_lines and not model_lines:
         sys.exit(0)
 
     sections: list[str] = ["## MEMORY — RELEVANT CONTEXT"]
+    if model_lines:
+        sections.append("### Model adaptation directives")
+        sections.extend(model_lines)
     if current_lines:
         sections.append("### Current beliefs")
         sections.extend(current_lines)

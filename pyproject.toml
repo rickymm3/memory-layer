@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memory-layer"
+version = "0.1.0"
+description = "Persistent shared memory layer for agentic workflows"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.27.1",
+    "requests>=2.28.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+postgres  = ["psycopg[binary]>=3.1"]
+openai    = ["openai>=1.50.0"]
+anthropic = ["anthropic>=0.40.0"]
+dashboard = ["flask>=3.0.0"]
+site = ["flask>=3.0.0", "flask-login>=0.6.3", "gunicorn>=22.0.0"]
+dev = [
+    "psycopg[binary]>=3.1",
+    "flask>=3.0.0",
+    "flask-login>=0.6.3",
+    "gunicorn>=22.0.0",
+    "openai>=1.50.0",
+    "anthropic>=0.40.0",
+    "pytest>=8.0",
+]
+
+[project.scripts]
+memory-layer = "mcp_server.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app", "mcp_server"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]

@@ -1,0 +1,37 @@
+{% extends "site/base.html" %}
+{% block title %}Sign up — Synapse{% endblock %}
+
+{% block content %}
+<div style="max-width:420px;margin:3rem auto">
+  <h1 style="font-size:1.4rem;font-weight:700;letter-spacing:-.02em;margin-bottom:.35rem">Create your brain</h1>
+  <p style="color:var(--muted);font-size:.88rem;margin-bottom:1.75rem">Join Synapse to start contributing ideas and discovering connections.</p>
+
+  {% if error %}
+    <div class="alert alert-error" style="margin-bottom:1.25rem">{{ error }}</div>
+  {% endif %}
+
+  <form method="post">
+    <div class="field">
+      <label>Username</label>
+      <input type="text" name="username" required autofocus autocomplete="username">
+    </div>
+    <div class="field">
+      <label>Email <span style="color:var(--muted);font-weight:400">(optional)</span></label>
+      <input type="email" name="email" autocomplete="email">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" name="password" required autocomplete="new-password" minlength="8">
+    </div>
+    <div class="field">
+      <label>Confirm Password</label>
+      <input type="password" name="confirm_password" required autocomplete="new-password">
+    </div>
+    <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;padding:.6rem">Create account</button>
+  </form>
+
+  <p style="text-align:center;margin-top:1.25rem;font-size:.85rem;color:var(--muted)">
+    Already have an account? <a href="{{ url_for('webapp.login') }}">Log in</a>
+  </p>
+</div>
+{% endblock %}

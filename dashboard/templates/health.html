@@ -89,6 +89,22 @@
     </span>
     <span class="label">Signal coverage</span>
   </div>
+
+  <div class="stat-card">
+    <span class="value {% if r.multi_source_atoms > 0 %}ok{% endif %}">
+      {{ r.multi_source_atoms }}
+    </span>
+    <span class="label">Multi-source atoms<br><small>(2+ users corroborated)</small></span>
+  </div>
+
+  <div class="stat-card">
+    <a href="/model_lessons" style="text-decoration:none;color:inherit">
+      <span class="value {% if r.model_lesson_count > 0 %}ok{% endif %}">
+        {{ r.model_lesson_count }}
+      </span>
+      <span class="label">Model lessons</span>
+    </a>
+  </div>
 </div>
 
 <div class="section-grid">

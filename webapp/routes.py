@@ -1,0 +1,1156 @@
+"""Public site Blueprint — landing, auth, user brain dashboard, settings."""
+from __future__ import annotations
+
+import json
+import uuid
+
+import psycopg
+from flask import (
+    Blueprint,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
+from flask_login import current_user, login_required, login_user, logout_user
+
+from app.config import get_config
+from webapp.auth import User
+
+site_bp = Blueprint("webapp", __name__, template_folder="templates")
+
+
+def _conn():
+    return psycopg.connect(get_config().database_url)
+
+
+def _ago(dt) -> str:
+    if not dt:
+        return "—"
+    from datetime import timezone
+    now = __import__("datetime").datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    diff = int((now - dt).total_seconds())
+    if diff < 60: return "just now"
+    if diff < 3600: return f"{diff // 60}m ago"
+    if diff < 86400: return f"{diff // 3600}h ago"
+    return f"{diff // 86400}d ago"
+
+
+# ── Public routes ─────────────────────────────────────────────────────────────
+
+@site_bp.route("/")
+def landing():
+    recent = []
+    novel = []
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, title, topic_tags, contributor_count, atom_count,
+                           novelty_flag, last_activity_at
+                    FROM discussions
+                    ORDER BY last_activity_at DESC
+                    LIMIT 20;
+                    """
+                )
+                for r in cur.fetchall():
+                    recent.append({
+                        "id": str(r[0]), "title": r[1], "topic_tags": r[2] or [],
+                        "contributor_count": r[3], "atom_count": r[4],
+                        "novelty_flag": r[5],
+                        "last_activity": _ago(r[6]),
+                    })
+                cur.execute(
+                    """
+                    SELECT id, title, topic_tags, contributor_count, atom_count, last_activity_at
+                    FROM discussions WHERE novelty_flag = true
+                    ORDER BY last_activity_at DESC LIMIT 5;
+                    """
+                )
+                for r in cur.fetchall():
+                    novel.append({
+                        "id": str(r[0]), "title": r[1], "topic_tags": r[2] or [],
+                        "contributor_count": r[3], "atom_count": r[4],
+                        "last_activity": _ago(r[5]),
+                    })
+    except Exception:
+        pass
+    return render_template("site/landing.html", recent=recent, novel=novel)
+
+
+@site_bp.route("/signup", methods=["GET", "POST"])
+def signup():
+    if current_user.is_authenticated:
+        return redirect(url_for("webapp.brain"))
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        email = request.form.get("email", "").strip() or None
+        password = request.form.get("password", "")
+        confirm = request.form.get("confirm_password", "")
+        if not username or not password:
+            error = "Username and password are required."
+        elif len(password) < 8:
+            error = "Password must be at least 8 characters."
+        elif password != confirm:
+            error = "Passwords do not match."
+        elif User.get_by_username(username):
+            error = "That username is already taken."
+        else:
+            user = User.create(username=username, password=password, email=email)
+            if user:
+                login_user(user)
+                return redirect(url_for("webapp.brain"))
+            error = "Account creation failed. Please try again."
+    return render_template("site/signup.html", error=error)
+
+
+@site_bp.route("/login", methods=["GET", "POST"])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for("webapp.brain"))
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        user = User.get_by_username(username)
+        if user and user.is_active and user.check_password(password):
+            login_user(user)
+            next_url = request.args.get("next")
+            return redirect(next_url or url_for("webapp.brain"))
+        error = "Invalid username or password."
+    return render_template("site/login.html", error=error)
+
+
+@site_bp.route("/logout", methods=["POST"])
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for("webapp.landing"))
+
+
+# ── Authenticated routes ──────────────────────────────────────────────────────
+
+@site_bp.route("/brain")
+@login_required
+def brain():
+    atoms = []
+    stats = {"total": 0, "facts": 0, "decisions": 0, "contested": 0}
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT ma.id, ma.content, ma.memory_type, ma.scope,
+                           ma.confidence, ma.importance, ma.lifecycle_status, ma.created_at,
+                           ma.disagreement_score, ma.visibility
+                    FROM memory_atoms ma
+                    JOIN memory_signals ms ON ms.memory_atom_id = ma.id
+                    WHERE ms.source_user_id = %s
+                      AND ma.lifecycle_status = 'active'
+                    ORDER BY ma.importance DESC, ma.created_at DESC
+                    LIMIT 50;
+                    """,
+                    (current_user.username,),
+                )
+                rows = cur.fetchall()
+                atoms = [
+                    {
+                        "id": str(r[0]),
+                        "content": r[1],
+                        "memory_type": r[2],
+                        "scope": r[3] or "—",
+                        "confidence": round(float(r[4]), 2),
+                        "importance": round(float(r[5]), 2),
+                        "lifecycle_status": r[6],
+                        "created_at": r[7].strftime("%Y-%m-%d") if r[7] else "—",
+                        "contested": float(r[8] or 0) >= 0.5,
+                        "visibility": r[9] or "private",
+                    }
+                    for r in rows
+                ]
+                # Stats
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(DISTINCT ma.id),
+                        COUNT(DISTINCT ma.id) FILTER (WHERE ma.memory_type = 'fact'),
+                        COUNT(DISTINCT ma.id) FILTER (WHERE ma.memory_type = 'decision'),
+                        COUNT(DISTINCT ma.id) FILTER (WHERE ma.disagreement_score >= 0.5)
+                    FROM memory_atoms ma
+                    JOIN memory_signals ms ON ms.memory_atom_id = ma.id
+                    WHERE ms.source_user_id = %s AND ma.lifecycle_status = 'active';
+                    """,
+                    (current_user.username,),
+                )
+                sr = cur.fetchone()
+                if sr:
+                    stats = {
+                        "total": sr[0] or 0,
+                        "facts": sr[1] or 0,
+                        "decisions": sr[2] or 0,
+                        "contested": sr[3] or 0,
+                    }
+    except Exception:
+        pass
+    return render_template("site/brain.html", atoms=atoms, stats=stats)
+
+
+@site_bp.route("/settings")
+@login_required
+def settings():
+    return render_template("site/settings.html")
+
+
+@site_bp.route("/settings/rotate-token", methods=["POST"])
+@login_required
+def rotate_token():
+    current_user.rotate_token()
+    flash("API token rotated. Update your MCP configs with the new token.", "success")
+    return redirect(url_for("webapp.settings"))
+
+
+# ── Atom visibility toggle ────────────────────────────────────────────────────
+
+@site_bp.route("/atom/<uuid:atom_id>/visibility", methods=["POST"])
+@login_required
+def toggle_visibility(atom_id):
+    new_vis = request.form.get("visibility", "private")
+    if new_vis not in ("private", "public"):
+        new_vis = "private"
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                # Only allow toggling atoms that belong to this user
+                cur.execute(
+                    """
+                    UPDATE memory_atoms ma SET visibility = %s
+                    FROM memory_signals ms
+                    WHERE ms.memory_atom_id = ma.id
+                      AND ms.source_user_id = %s
+                      AND ma.id = %s;
+                    """,
+                    (new_vis, current_user.username, str(atom_id)),
+                )
+            conn.commit()
+    except Exception:
+        pass
+    return redirect(request.referrer or url_for("webapp.brain"))
+
+
+# ── Web capture (ingest without MCP) ─────────────────────────────────────────
+
+@site_bp.route("/capture", methods=["GET", "POST"])
+@login_required
+def capture():
+    if request.method == "GET":
+        return render_template("site/capture.html")
+
+    content = request.form.get("content", "").strip()
+    memory_type = request.form.get("memory_type", "observation").strip()
+    make_private = request.form.get("make_private") == "1"
+    visibility = "private" if make_private else "public"
+
+    if not content:
+        flash("Content cannot be empty.", "error")
+        return render_template("site/capture.html")
+
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from app.memory_store import MemoryStore
+        from app.config import get_config
+        from app.commit_pipeline import MemoryCommitPipeline
+
+        cfg = get_config()
+        store = MemoryStore(cfg)
+        pipeline = MemoryCommitPipeline()
+        result = pipeline.commit_candidate(
+            candidate={
+                "content": content,
+                "memory_type": memory_type,
+                "scope": "user",
+                "confidence": 0.6,
+                "importance": 0.5,
+            },
+            source_key="web_capture",
+            source_type="web",
+            source_user_id=current_user.username,
+            visibility=visibility,
+        )
+        atom_id = result.committed_atom_id
+        flash(
+            f"Captured {'(kept private)' if make_private else '— public and will appear in discussions'}.",
+            "success",
+        )
+    except Exception as exc:
+        flash(f"Error saving: {exc}", "error")
+
+    return redirect(url_for("webapp.brain"))
+
+
+# ── Social routes ─────────────────────────────────────────────────────────────
+
+@site_bp.route("/feed")
+def feed():
+    format_filter = request.args.get("format", "").strip() or None
+    tag_filter = request.args.get("tag", "").strip() or None
+    posts = []
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                params: list = []
+                where = ["status = 'published'"]
+                if format_filter:
+                    where.append("format = %s")
+                    params.append(format_filter)
+                if tag_filter:
+                    where.append("%s = ANY(topic_tags)")
+                    params.append(tag_filter)
+                where_sql = " AND ".join(where)
+                params.append(30)
+                cur.execute(
+                    f"""
+                    SELECT sp.id, sp.title, sp.format, sp.topic_tags,
+                           sp.confidence_at_publish, sp.published_at,
+                           u.username AS author
+                    FROM social_posts sp
+                    LEFT JOIN users u ON u.id = sp.author_user_id
+                    WHERE {where_sql}
+                    ORDER BY sp.published_at DESC
+                    LIMIT %s;
+                    """,
+                    params,
+                )
+                rows = cur.fetchall()
+                posts = [
+                    {
+                        "id": str(r[0]),
+                        "title": r[1],
+                        "format": r[2],
+                        "topic_tags": r[3] or [],
+                        "confidence": round(float(r[4] or 0), 2),
+                        "published_at": r[5].strftime("%Y-%m-%d") if r[5] else "—",
+                        "author": r[6] or "anonymous",
+                    }
+                    for r in rows
+                ]
+    except Exception:
+        pass
+    return render_template(
+        "site/feed.html",
+        posts=posts,
+        format_filter=format_filter or "",
+        tag_filter=tag_filter or "",
+    )
+
+
+@site_bp.route("/post/<uuid:post_id>")
+def post_detail(post_id):
+    post = None
+    contributors = []
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT sp.id, sp.title, sp.body, sp.format, sp.topic_tags,
+                           sp.confidence_at_publish, sp.published_at, sp.status,
+                           u.username AS author
+                    FROM social_posts sp
+                    LEFT JOIN users u ON u.id = sp.author_user_id
+                    WHERE sp.id = %s;
+                    """,
+                    (str(post_id),),
+                )
+                r = cur.fetchone()
+                if r:
+                    post = {
+                        "id": str(r[0]),
+                        "title": r[1],
+                        "body": r[2],
+                        "format": r[3],
+                        "topic_tags": r[4] or [],
+                        "confidence": round(float(r[5] or 0), 2),
+                        "published_at": r[6].strftime("%Y-%m-%d") if r[6] else None,
+                        "status": r[7],
+                        "author": r[8] or "anonymous",
+                    }
+                cur.execute(
+                    """
+                    SELECT u.username, pc.contribution_type, pc.quote
+                    FROM post_contributors pc
+                    LEFT JOIN users u ON u.id = pc.user_id
+                    WHERE pc.post_id = %s
+                    ORDER BY pc.created_at;
+                    """,
+                    (str(post_id),),
+                )
+                contributors = [
+                    {"username": r[0] or "anonymous", "type": r[1], "quote": r[2]}
+                    for r in cur.fetchall()
+                ]
+    except Exception:
+        pass
+    if not post:
+        return "Post not found", 404
+    return render_template("site/post_detail.html", post=post, contributors=contributors)
+
+
+@site_bp.route("/post/<uuid:post_id>/publish", methods=["POST"])
+@login_required
+def publish_post(post_id):
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE social_posts
+                    SET status = 'published', published_at = now()
+                    WHERE id = %s AND author_user_id = (
+                        SELECT id FROM users WHERE username = %s
+                    ) AND status = 'draft';
+                    """,
+                    (str(post_id), current_user.username),
+                )
+            conn.commit()
+    except Exception:
+        pass
+    flash("Post published.", "success")
+    return redirect(url_for("webapp.post_detail", post_id=post_id))
+
+
+@site_bp.route("/post/<uuid:post_id>/discard", methods=["POST"])
+@login_required
+def discard_post(post_id):
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE social_posts SET status = 'archived'
+                    WHERE id = %s AND author_user_id = (
+                        SELECT id FROM users WHERE username = %s
+                    );
+                    """,
+                    (str(post_id), current_user.username),
+                )
+            conn.commit()
+    except Exception:
+        pass
+    flash("Post discarded.", "success")
+    return redirect(url_for("webapp.drafts"))
+
+
+@site_bp.route("/drafts")
+@login_required
+def drafts():
+    posts = []
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT sp.id, sp.title, sp.format, sp.confidence_at_publish, sp.created_at
+                    FROM social_posts sp
+                    JOIN users u ON u.id = sp.author_user_id
+                    WHERE u.username = %s AND sp.status = 'draft'
+                    ORDER BY sp.created_at DESC;
+                    """,
+                    (current_user.username,),
+                )
+                rows = cur.fetchall()
+                posts = [
+                    {
+                        "id": str(r[0]),
+                        "title": r[1],
+                        "format": r[2],
+                        "confidence": round(float(r[3] or 0), 2),
+                        "created_at": r[4].strftime("%Y-%m-%d %H:%M") if r[4] else "—",
+                    }
+                    for r in rows
+                ]
+    except Exception:
+        pass
+    return render_template("site/drafts.html", posts=posts)
+
+
+@site_bp.route("/connections")
+@login_required
+def connections():
+    from app.topic_matcher import find_connections_for_user
+    matches = []
+    try:
+        matches = find_connections_for_user(username=current_user.username, limit=15)
+    except Exception:
+        pass
+    return render_template("site/connections.html", matches=matches)
+
+
+# ── Admin view ────────────────────────────────────────────────────────────────
+
+@site_bp.route("/admin")
+@login_required
+def admin():
+    if not current_user.is_admin:
+        return "Forbidden", 403
+
+    vis_filter = request.args.get("vis", "")
+    type_filter = request.args.get("type", "")
+    user_filter = request.args.get("user", "")
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = 50
+    offset = (page - 1) * per_page
+
+    atoms = []
+    stats = {}
+    users = []
+    total = 0
+
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                # Global stats
+                cur.execute("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE lifecycle_status='active'),
+                        COUNT(*) FILTER (WHERE visibility='public' AND lifecycle_status='active'),
+                        COUNT(*) FILTER (WHERE visibility='private' AND lifecycle_status='active'),
+                        COUNT(*) FILTER (WHERE interest_flag=true AND lifecycle_status='active')
+                    FROM memory_atoms;
+                """)
+                r = cur.fetchone()
+                stats = {"total": r[0], "public": r[1], "private": r[2], "novel": r[3]}
+
+                cur.execute("SELECT COUNT(*) FROM discussions;")
+                stats["discussions"] = cur.fetchone()[0]
+
+                cur.execute("SELECT COUNT(*) FROM users;")
+                stats["users"] = cur.fetchone()[0]
+
+                # User list for filter
+                cur.execute("SELECT DISTINCT source_user_id FROM memory_signals ORDER BY source_user_id;")
+                users = [r[0] for r in cur.fetchall()]
+
+                # Build filter
+                where = ["ma.lifecycle_status = 'active'"]
+                params: list = []
+                if vis_filter:
+                    where.append("ma.visibility = %s"); params.append(vis_filter)
+                if type_filter:
+                    where.append("ma.memory_type = %s"); params.append(type_filter)
+                if user_filter:
+                    where.append("ms.source_user_id = %s"); params.append(user_filter)
+
+                where_sql = " AND ".join(where)
+                count_params = params.copy()
+                params += [per_page, offset]
+
+                cur.execute(f"""
+                    SELECT COUNT(DISTINCT ma.id)
+                    FROM memory_atoms ma
+                    LEFT JOIN memory_signals ms ON ms.memory_atom_id = ma.id
+                    WHERE {where_sql};
+                """, count_params)
+                total = cur.fetchone()[0]
+
+                cur.execute(f"""
+                    SELECT DISTINCT ma.id, ma.content, ma.memory_type, ma.scope,
+                           ma.confidence, ma.visibility, ma.interest_flag,
+                           ma.novelty_score, ma.created_at, ms.source_user_id
+                    FROM memory_atoms ma
+                    LEFT JOIN memory_signals ms ON ms.memory_atom_id = ma.id
+                    WHERE {where_sql}
+                    ORDER BY ma.created_at DESC
+                    LIMIT %s OFFSET %s;
+                """, params)
+                atoms = [
+                    {
+                        "id": str(r[0]), "content": r[1], "memory_type": r[2],
+                        "scope": r[3] or "—", "confidence": round(float(r[4]), 2),
+                        "visibility": r[5], "interest_flag": r[6],
+                        "novelty_score": round(float(r[7] or 0), 2),
+                        "created_at": r[8].strftime("%Y-%m-%d %H:%M") if r[8] else "—",
+                        "source_user": r[9] or "—",
+                    }
+                    for r in cur.fetchall()
+                ]
+    except Exception as exc:
+        flash(f"DB error: {exc}", "error")
+
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    return render_template("site/admin.html",
+        atoms=atoms, stats=stats, users=users, total=total,
+        page=page, total_pages=total_pages,
+        vis_filter=vis_filter, type_filter=type_filter, user_filter=user_filter)
+
+
+@site_bp.route("/admin/atom/<uuid:atom_id>/visibility", methods=["POST"])
+@login_required
+def admin_toggle_visibility(atom_id):
+    if not current_user.is_admin:
+        return "Forbidden", 403
+    new_vis = request.form.get("visibility", "private")
+    if new_vis not in ("private", "public"):
+        new_vis = "private"
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE memory_atoms SET visibility = %s WHERE id = %s;",
+                    (new_vis, str(atom_id)),
+                )
+            conn.commit()
+    except Exception:
+        pass
+    return redirect(request.referrer or url_for("webapp.admin"))
+
+
+# ── Graph data API ────────────────────────────────────────────────────────────
+
+@site_bp.route("/api/graph")
+def api_graph():
+    from flask import jsonify
+    nodes = []
+    links = []
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, title, topic_tags, atom_count, contributor_count,
+                           novelty_flag, last_activity_at
+                    FROM discussions ORDER BY atom_count DESC LIMIT 200;
+                """)
+                rows = cur.fetchall()
+
+        # Build node list
+        tag_to_ids: dict[str, list[str]] = {}
+        for r in rows:
+            nid = str(r[0])
+            tags = r[2] or []
+            nodes.append({
+                "id": nid,
+                "title": r[1],
+                "atom_count": r[3] or 1,
+                "contributor_count": r[4] or 0,
+                "novelty_flag": bool(r[5]),
+                "last_activity": _ago(r[6]),
+            })
+            for tag in tags:
+                tag_to_ids.setdefault(tag, []).append(nid)
+
+        # Edges: discussions sharing a topic_tag
+        seen: set[tuple] = set()
+        for tag, ids in tag_to_ids.items():
+            for i in range(len(ids)):
+                for j in range(i + 1, len(ids)):
+                    a, b = ids[i], ids[j]
+                    key = (min(a, b), max(a, b))
+                    if key not in seen:
+                        seen.add(key)
+                        links.append({"source": a, "target": b, "tag": tag})
+
+    except Exception:
+        pass
+
+    return jsonify({"nodes": nodes, "links": links})
+
+
+@site_bp.route("/discussions/graph")
+def discussion_graph():
+    return render_template("site/discussion_graph.html")
+
+
+# ── MCP over HTTP — used by npm bridge (Claude Desktop) ──────────────────────
+
+@site_bp.route("/mcp/sse", methods=["GET", "POST"])
+def mcp_sse():
+    """MCP tool dispatcher for the npx memory-layer bridge.
+
+    POST: {"tool": "<name>", "args": {...}}
+          → runs the tool, returns {"result": {...}} or {"error": "..."}
+    GET:  health check / discovery.
+
+    Auth: Authorization: Bearer <api_token>
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Authorization: Bearer <api_token> required"}), 401
+    token = auth_header[7:].strip()
+    username = _resolve_api_user(token)
+    if not username:
+        return jsonify({"error": "Invalid or inactive api_token"}), 401
+
+    if request.method == "GET":
+        return jsonify({"status": "ok", "server": "memoryLayer", "user": username})
+
+    body = request.get_json(silent=True) or {}
+    tool = body.get("tool", "")
+    args = body.get("args", {})
+
+    try:
+        result = _dispatch_mcp_tool(tool, args, username)
+        return jsonify({"result": result})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+def _dispatch_mcp_tool(tool: str, args: dict, username: str):
+    """Route a tool name + args to the appropriate backend function."""
+    if tool == "memory_health":
+        from mcp_server.tools.health import get_memory_health
+        return get_memory_health()
+
+    if tool == "memory_search":
+        from mcp_server.tools.search import search_memories
+        return search_memories(
+            query=args.get("query", ""),
+            limit=int(args.get("limit", 5)),
+            scope=args.get("scope"),
+            memory_type=args.get("memory_type"),
+            min_similarity=float(args.get("min_similarity", 0.0)),
+        )
+
+    if tool == "memory_store_auto":
+        from mcp_server.tools.store_auto import store_memory_auto
+        return store_memory_auto(
+            content=args.get("content", ""),
+            memory_type=args.get("memory_type", "observation"),
+            relationship=args.get("relationship", "new"),
+            context_summary=args.get("context_summary"),
+            scope=args.get("scope"),
+            confidence=float(args.get("confidence", 0.8)),
+            importance=float(args.get("importance", 0.5)),
+            reconciliation_reason=args.get("reconciliation_reason"),
+            matched_memory_ids=args.get("matched_memory_ids"),
+            source_user_id=username,
+            visibility=args.get("visibility", "public"),
+        )
+
+    if tool == "memory_get":
+        from mcp_server.tools.get import get_memory_by_id
+        return get_memory_by_id(args.get("memory_id", ""))
+
+    if tool == "memory_task_context":
+        from mcp_server.tools.task_context import get_task_context
+        return get_task_context(
+            project_scope=args.get("project_scope", "user"),
+            model_scope=args.get("model_scope"),
+            task_hint=args.get("task_hint"),
+            recent_tasks=int(args.get("recent_tasks", 5)),
+            compact=bool(args.get("compact", True)),
+        )
+
+    if tool == "memory_audit":
+        from mcp_server.tools.health import get_memory_health
+        from mcp_server.tools.stale_atoms import get_stale_atoms
+        from mcp_server.tools.find_duplicates import find_duplicate_atoms
+        health = get_memory_health()
+        stale = get_stale_atoms(days_threshold=int(args.get("stale_days", 90)), scope=args.get("scope"), limit=20)
+        dupes = find_duplicate_atoms(similarity_threshold=float(args.get("duplicate_threshold", 0.90)), scope=args.get("scope"), limit=20)
+        return {"health": health, "stale_atoms": stale, "duplicate_pairs": dupes.get("pairs", []) if isinstance(dupes, dict) else dupes}
+
+    if tool == "memory_link_atoms":
+        from mcp_server.tools.link_atoms import link_atoms
+        return link_atoms(
+            atom_a_id=args.get("atom_a_id", ""),
+            atom_b_id=args.get("atom_b_id", ""),
+            relation_type=args.get("relation_type", "related"),
+            confidence=float(args.get("confidence", 0.8)),
+        )
+
+    if tool == "memory_related":
+        from mcp_server.tools.related_atoms import get_related_atoms
+        return get_related_atoms(
+            atom_id=args.get("atom_id", ""),
+            depth=int(args.get("depth", 1)),
+            relation_types=args.get("relation_types"),
+        )
+
+    raise ValueError(f"Unknown tool: {tool}")
+
+
+# ── REST ingest API — proper channel for Ollama / external LLMs ───────────────
+
+def _resolve_api_user(token: str) -> str | None:
+    """Return username for a valid api_token, else None."""
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT username FROM users WHERE api_token = %s AND is_active = true LIMIT 1;",
+                    (token,),
+                )
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception:
+        return None
+
+
+@site_bp.route("/api/ingest", methods=["POST"])
+def api_ingest():
+    """HTTP ingest endpoint for Ollama / external LLMs.
+
+    Auth: Authorization: Bearer <api_token>
+    Body (JSON):
+        content       str   required
+        memory_type   str   optional (default: observation)
+        visibility    str   optional (default: public)
+        scope         str   optional (default: user)
+        source        str   optional (label for the originating tool/model)
+    Returns: JSON write report with atom_id, signal_id, decision, quality_score.
+    """
+    # ── Auth ──
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Missing Authorization: Bearer <api_token>"}), 401
+    token = auth_header[7:].strip()
+    username = _resolve_api_user(token)
+    if not username:
+        return jsonify({"error": "Invalid or inactive api_token"}), 401
+
+    # ── Parse body ──
+    body = request.get_json(silent=True) or {}
+    content = (body.get("content") or "").strip()
+    if not content:
+        return jsonify({"error": "content is required"}), 400
+
+    memory_type = body.get("memory_type", "observation")
+    visibility = body.get("visibility", "public")
+    scope = body.get("scope") or "user"
+    source_label = body.get("source", "api")
+
+    if visibility not in ("public", "private", "team"):
+        visibility = "public"
+
+    # ── Commit pipeline ──
+    try:
+        from app.commit_pipeline import MemoryCommitPipeline
+        pipeline = MemoryCommitPipeline()
+        result = pipeline.commit_candidate(
+            content=content,
+            memory_type=memory_type,
+            source_key=f"{source_label}:{username}",
+            caller_id=username,
+            visibility=visibility,
+            scope=scope,
+        )
+        return jsonify({
+            "stored": result.get("stored", False),
+            "decision": result.get("decision"),
+            "atom_id": result.get("memory_atom_id"),
+            "signal_id": result.get("memory_signal_id"),
+            "quality_score": result.get("quality_score"),
+            "content": result.get("content"),
+        }), 200 if result.get("stored") else 202
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Discussion routes ─────────────────────────────────────────────────────────
+
+@site_bp.route("/discussions")
+@login_required
+def discussions():
+    rows = []
+    unread_total = 0
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                # Discussions this user has contributed to, with their unread count
+                cur.execute(
+                    """
+                    SELECT d.id, d.title, d.topic_tags, d.contributor_count,
+                           d.atom_count, d.novelty_flag, d.last_activity_at,
+                           COALESCE(SUM(n.new_atom_count) FILTER (WHERE n.read = false), 0) AS unread
+                    FROM discussions d
+                    JOIN discussion_atoms da ON da.discussion_id = d.id
+                    LEFT JOIN user_notifications n
+                        ON n.discussion_id = d.id
+                        AND n.user_id = (SELECT id FROM users WHERE username = %s)
+                    WHERE da.source_user_id = %s
+                    GROUP BY d.id
+                    ORDER BY d.last_activity_at DESC
+                    LIMIT 50;
+                    """,
+                    (current_user.username, current_user.username),
+                )
+                for r in cur.fetchall():
+                    unread = int(r[7])
+                    unread_total += unread
+                    rows.append({
+                        "id": str(r[0]),
+                        "title": r[1],
+                        "topic_tags": r[2] or [],
+                        "contributor_count": r[3],
+                        "atom_count": r[4],
+                        "novelty_flag": r[5],
+                        "last_activity": _ago(r[6]),
+                        "unread": unread,
+                    })
+    except Exception:
+        pass
+    return render_template("site/discussions.html", discussions=rows, unread_total=unread_total)
+
+
+@site_bp.route("/discussion/<uuid:disc_id>")
+@login_required
+def discussion_detail(disc_id):
+    disc = None
+    contributions = []
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, title, topic_tags, contributor_count, novelty_flag, last_activity_at "
+                    "FROM discussions WHERE id = %s;",
+                    (str(disc_id),),
+                )
+                r = cur.fetchone()
+                if r:
+                    disc = {
+                        "id": str(r[0]), "title": r[1], "topic_tags": r[2] or [],
+                        "contributor_count": r[3], "novelty_flag": r[4],
+                        "last_activity": r[5].strftime("%Y-%m-%d") if r[5] else "—",
+                    }
+                cur.execute(
+                    """
+                    SELECT ma.content, ma.memory_type, ma.confidence,
+                           da.novelty_score, da.source_user_id, da.added_at,
+                           ma.topic_tags
+                    FROM discussion_atoms da
+                    JOIN memory_atoms ma ON ma.id = da.atom_id
+                    WHERE da.discussion_id = %s
+                    ORDER BY da.novelty_score DESC, da.added_at ASC
+                    LIMIT 100;
+                    """,
+                    (str(disc_id),),
+                )
+                for r in cur.fetchall():
+                    is_mine = r[4] == current_user.username
+                    contributions.append({
+                        "content": r[0],
+                        "memory_type": r[1],
+                        "confidence": round(float(r[2]), 2),
+                        "novelty_score": round(float(r[3]), 2),
+                        "is_mine": is_mine,
+                        "attribution": "you" if is_mine else "anonymous contributor",
+                        "added_at": r[5].strftime("%Y-%m-%d") if r[5] else "—",
+                        "topic_tags": r[6] or [],
+                    })
+                # Mark notifications read
+                cur.execute(
+                    """
+                    UPDATE user_notifications SET read = true
+                    WHERE discussion_id = %s
+                      AND user_id = (SELECT id FROM users WHERE username = %s);
+                    """,
+                    (str(disc_id), current_user.username),
+                )
+            conn.commit()
+    except Exception:
+        pass
+    if not disc:
+        return "Discussion not found", 404
+    # Related discussions by topic_tags overlap
+    related = []
+    if disc.get("topic_tags"):
+        try:
+            with _conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT id, title, contributor_count, atom_count, last_activity_at
+                        FROM discussions
+                        WHERE id != %s AND topic_tags && %s
+                        ORDER BY last_activity_at DESC LIMIT 5;
+                        """,
+                        (str(disc_id), disc["topic_tags"]),
+                    )
+                    related = [
+                        {"id": str(r[0]), "title": r[1],
+                         "contributor_count": r[2], "atom_count": r[3],
+                         "last_activity": _ago(r[4])}
+                        for r in cur.fetchall()
+                    ]
+        except Exception:
+            pass
+    return render_template("site/discussion_detail.html", disc=disc,
+                           contributions=contributions, related=related)
+
+
+def _unread_notification_count(username: str) -> int:
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COALESCE(SUM(n.new_atom_count), 0)
+                    FROM user_notifications n
+                    JOIN users u ON u.id = n.user_id
+                    WHERE u.username = %s AND n.read = false;
+                    """,
+                    (username,),
+                )
+                row = cur.fetchone()
+                return int(row[0]) if row else 0
+    except Exception:
+        return 0
+
+
+# ── Admin chat ───────────────────────────────────────────────────────────────
+
+_CHAT_HISTORY_LIMIT = 100  # max messages per session (50 turns)
+
+
+def _session_load(session_id: str | None) -> list[dict]:
+    if not session_id:
+        return []
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT history FROM dashboard_sessions WHERE id = %s;",
+                    (session_id,),
+                )
+                row = cur.fetchone()
+        return list(row[0]) if row else []
+    except Exception:
+        return []
+
+
+def _session_save(session_id: str | None, history: list[dict]) -> str:
+    sid = session_id or str(uuid.uuid4())
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO dashboard_sessions (id, history, updated_at)
+                    VALUES (%s, %s::jsonb, NOW())
+                    ON CONFLICT (id) DO UPDATE
+                        SET history = EXCLUDED.history,
+                            updated_at = NOW();
+                    """,
+                    (sid, json.dumps(history)),
+                )
+                cur.execute(
+                    "DELETE FROM dashboard_sessions WHERE updated_at < NOW() - INTERVAL '30 days';"
+                )
+            conn.commit()
+    except Exception:
+        pass
+    return sid
+
+
+@site_bp.route("/chat", methods=["GET", "POST"])
+@login_required
+def chat():
+    if not current_user.is_admin:
+        return "Forbidden", 403
+
+    session_id: str | None = session.get("chat_session_id")
+    history: list[dict] = _session_load(session_id)
+    error = None
+
+    if request.method == "POST":
+        message = request.form.get("message", "").strip()
+        if message:
+            try:
+                from app.chat import chat_with_research, clean_assistant_response
+
+                messages_for_llm = [
+                    {"role": m["role"], "content": m["content"]}
+                    for m in history
+                ] + [{"role": "user", "content": message}]
+
+                raw_answer, memories, research_results, research_status, context_eval, gap_state, route = chat_with_research(
+                    messages_for_llm
+                )
+                answer = clean_assistant_response(raw_answer)
+
+                history.append({"role": "user", "content": message})
+                history.append({
+                    "role": "assistant",
+                    "content": answer,
+                    "memories": [
+                        {
+                            "id": str(m.get("id", "")),
+                            "content": (m.get("context_summary") or m.get("content", ""))[:200],
+                            "memory_type": m.get("memory_type", ""),
+                            "scope": m.get("scope") or "—",
+                            "similarity": round(float(m.get("similarity", 0.0)), 3),
+                        }
+                        for m in memories
+                    ],
+                    "research_status": research_status,
+                    "research_count": len(research_results),
+                    "gap_info": {
+                        "status": gap_state.status,
+                        "searches": len(gap_state.searched_queries),
+                        "clarifying_question": gap_state.clarifying_question,
+                    } if gap_state else None,
+                    "route": route,
+                    "context_eval": {
+                        "context_status": context_eval.context_status,
+                        "confidence": round(context_eval.confidence, 2),
+                        "final_action": context_eval.final_action,
+                        "used_count": len(context_eval.used_atom_ids),
+                        "ignored_count": len(context_eval.ignored_atom_ids),
+                        "issues_count": len(context_eval.issues),
+                        "trace_id": context_eval.trace_id,
+                    } if context_eval else None,
+                })
+
+                if len(history) > _CHAT_HISTORY_LIMIT:
+                    history = history[-_CHAT_HISTORY_LIMIT:]
+
+                session_id = _session_save(session_id, history)
+                session["chat_session_id"] = session_id
+            except Exception as exc:
+                error = str(exc)
+        else:
+            error = "Please enter a message."
+
+    return render_template("site/chat.html", history=history, error=error)
+
+
+@site_bp.route("/chat/clear", methods=["POST"])
+@login_required
+def chat_clear():
+    if not current_user.is_admin:
+        return "Forbidden", 403
+    session_id = session.pop("chat_session_id", None)
+    if session_id:
+        try:
+            with _conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM dashboard_sessions WHERE id = %s;",
+                        (session_id,),
+                    )
+                conn.commit()
+        except Exception:
+            pass
+    return redirect(url_for("webapp.chat"))
+
+
+# ── Health (for Railway/Render healthcheck) ───────────────────────────────────
+
+@site_bp.route("/health")
+def health():
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+        return {"status": "ok"}, 200
+    except Exception as exc:
+        return {"status": "error", "detail": str(exc)}, 500

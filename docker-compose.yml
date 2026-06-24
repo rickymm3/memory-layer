@@ -39,5 +39,31 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  site:
+    build: .
+    container_name: memory-layer-site
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://memory:memory_dev_password@db:5432/memory_layer_development
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
+      CHAT_PROVIDER: ${CHAT_PROVIDER:-auto}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_COMPAT_BASE_URL: ${OPENAI_COMPAT_BASE_URL:-}
+      OPENAI_COMPAT_API_KEY: ${OPENAI_COMPAT_API_KEY:-none}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-auto}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      CHAT_MODEL: ${CHAT_MODEL:-qwen3:8b}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3-embedding:latest}
+    ports:
+      - "5000:5000"
+    command: >
+      sh -c "python db/apply_migrations.py &&
+             gunicorn 'app_main:create_app()' --bind 0.0.0.0:5000 --workers 2 --timeout 60"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 volumes:
   postgres_data:

@@ -1,4 +1,9 @@
-"""Tests for the write quality scorer — pure Python, no DB or LLM needed."""
+"""Tests for the epistemic write classifier — pure Python, no DB or LLM needed.
+
+Philosophy: the classifier never rejects for quality reasons. Every signal has
+epistemic value. Only guardrail blocks (secrets, empty, invalid scope) return
+decision=reject. Everything else is stored with appropriate type and confidence.
+"""
 from __future__ import annotations
 
 import pytest
@@ -31,17 +36,44 @@ def test_decision_is_valid_value():
     assert r.decision in ("accept", "downgrade", "reject")
 
 
-# ── Hard reject cases ─────────────────────────────────────────────────────────
+# ── Guardrail (hard reject) cases — ONLY these should reject ──────────────────
 
-def test_too_short_is_rejected():
+def test_empty_content_is_rejected():
     r = score_write_quality("ok")
     assert r.decision == "reject"
     assert r.quality_score == 0.0
 
 
-def test_question_is_rejected():
-    r = score_write_quality("What database should we use?")
+def test_invalid_scope_rejected_at_guardrail():
+    r = score_write_quality("We use Postgres.", scope="ai_training")
     assert r.decision == "reject"
+
+
+def test_api_key_blocked_by_guardrail():
+    r = score_write_quality("Use sk-ant-api03-abc123xyz for auth")
+    assert r.decision == "reject"
+    assert "guardrail" in r.signals[0]
+
+
+# ── Questions are stored, not rejected (epistemic philosophy) ─────────────────
+
+def test_question_is_stored_not_rejected():
+    r = score_write_quality("What database should we use?")
+    assert r.decision != "reject"
+    assert r.suggested_memory_type is not None or r.decision in ("accept", "downgrade")
+
+
+# ── Vague/belief content is stored as belief tier, not rejected ───────────────
+
+def test_vague_content_is_stored():
+    r = score_write_quality("The sky might be red maybe.")
+    assert r.decision != "reject"
+
+
+def test_vague_content_suggests_belief_type():
+    r = score_write_quality("I think maybe we should use Postgres probably.")
+    assert r.decision != "reject"
+    assert r.suggested_memory_type in ("belief", None)
 
 
 # ── Durable content: should score high ────────────────────────────────────────
@@ -95,7 +127,7 @@ def test_date_reference_penalizes():
 
 def test_temporal_now_penalizes():
     r = score_write_quality("Currently we are using SQLite for local development.")
-    assert any("temporal" in s.lower() for s in r.signals)
+    assert any("temporal" in s.lower() or "now" in s.lower() or "decay" in s.lower() for s in r.signals)
 
 
 def test_todo_phrasing_penalizes():
@@ -103,9 +135,10 @@ def test_todo_phrasing_penalizes():
     assert r.quality_score < 0.6 or any("to-do" in s.lower() or "action" in s.lower() for s in r.signals)
 
 
-def test_vague_qualifiers_penalize():
+def test_vague_qualifiers_penalize_score_but_not_reject():
     r = score_write_quality("We might probably use React for the frontend maybe.")
-    assert any("vague" in s.lower() for s in r.signals)
+    assert r.decision != "reject"
+    assert any("belief" in s.lower() or "uncertain" in s.lower() or "vague" in s.lower() for s in r.signals)
 
 
 # ── Downgrade behaviour ───────────────────────────────────────────────────────
@@ -145,4 +178,43 @@ def test_accept_signals_not_empty():
         memory_type="decision",
     )
     assert len(r.signals) > 0
+
+
+# ── Scope allowlist ────────────────────────────────────────────────────────────
+
+def test_valid_scope_project_passes():
+    r = score_write_quality(
+        "We use PostgreSQL as our primary database.", scope="project:memory-layer"
+    )
+    assert r.decision != "reject" or "scope" not in " ".join(r.signals)
+
+
+def test_valid_scope_model_passes():
+    r = score_write_quality(
+        "We use PostgreSQL as our primary database.", scope="model:claude-sonnet-4-6"
+    )
+    assert r.decision != "reject" or "scope" not in " ".join(r.signals)
+
+
+def test_valid_scope_user_passes():
+    r = score_write_quality("We use PostgreSQL as our primary database.", scope="user")
+    assert r.decision != "reject" or "scope" not in " ".join(r.signals)
+
+
+def test_invalid_scope_rejected():
+    r = score_write_quality(
+        "We use PostgreSQL as our primary database.", scope="ai_training"
+    )
+    assert r.decision == "reject"
+    assert "invalid scope" in r.signals[0]
+
+
+def test_bare_project_scope_rejected():
+    r = score_write_quality("We use PostgreSQL as our primary database.", scope="project")
+    assert r.decision == "reject"
+
+
+def test_none_scope_is_ok():
+    r = score_write_quality("We use PostgreSQL as our primary database.", scope=None)
+    assert r.decision != "reject" or "scope" not in " ".join(r.signals)
 

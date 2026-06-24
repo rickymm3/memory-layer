@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import psycopg
 
 from app.config import get_config
-from app.llm_provider import get_llm_client
+from app.llm_provider import get_llm_client, AnthropicClient
 from mcp_server.tools.store_auto import store_memory_auto
 
 
@@ -40,18 +40,36 @@ _REFLECTION_PROMPT = """\
 You are a task-reflection assistant for a software project that uses a persistent memory layer.
 
 Your job is to extract concrete, reusable lessons from a completed implementation task.
+There are THREE distinct categories of lesson — assign each to the correct scope:
+
+1. PROJECT LESSONS (scope: "{scope}"):
+   Architectural decisions, constraints, workflow guardrails, patterns specific to this project.
+   Example: "For project:memory-layer, all signals are immutable after creation."
+
+2. MODEL LESSONS (scope: "model:{model_id}"):
+   Observations about how the AI model itself behaved during this task — mistakes it made,
+   prompting adaptations that helped, blind spots, defaults that needed overriding.
+   Example: "claude-sonnet-4-6 defaults to adding abstractions beyond task scope; specify
+   'change only what is asked' explicitly."
+   context_summary for model lessons MUST be an actionable injection string — a directive
+   that can be prepended to future prompts to prevent recurrence.
+   Example: "Require explicit scope constraint: only change files mentioned in the task."
+
+3. USER LESSONS (scope: "user"):
+   Facts about the user's preferences, workflow, or communication style.
+   Only extract these when the task notes clearly describe a user preference.
 
 A lesson is worth storing if it is:
-- A specific, observed behavior of a model, tool, or project workflow
-- An architectural constraint or decision relevant to future work in this scope
-- A workflow guardrail that prevented or caught a mistake
-- A concrete instruction about what a model or tool requires to work correctly
+- A specific, observed behavior (not hypothetical)
+- New information (not already in the existing lessons list)
+- Actionable — it changes how future tasks should be approached
+- Durable — relevant beyond this one task
 
 Do NOT generate lessons that are:
-- Vague or generic ("make sure to test things", "always write good code")
-- Speculative about what might happen in the future
-- Simply restating the task description or the project's known invariants
-- Covered already by obvious engineering best practice
+- Vague or generic ("always test", "write good code")
+- Speculative about future behavior
+- Simply restating the task description or project invariants
+- Covered by obvious engineering best practice
 
 Classification rules:
 - safe_to_store: concrete, low-risk, observed fact or instruction; safe to auto-store
@@ -60,9 +78,9 @@ Classification rules:
 
 For each lesson, return:
 - content: a full, standalone sentence (canonical memory atom)
-- context_summary: a concise, prompt-friendly version (may omit scope qualifier if meaning is clear)
-- memory_type: one of "instruction", "fact", or "decision"
-- scope: the exact scope this applies to (e.g. "model:qwen3-8b", "project:memory-layer", "project:memory-layer-dashboard")
+- context_summary: actionable injection string (model lessons) or compact summary (others)
+- memory_type: "observation" (model) | "instruction" | "fact" | "decision"
+- scope: exact scope — "{scope}", "model:{model_id}", or "user"
 - classification: "safe_to_store" | "needs_review" | "skip"
 
 Return a strict JSON array only. No preamble, no explanation, no markdown fences.
@@ -73,7 +91,14 @@ Example output:
     "content": "For project:memory-layer, all dashboard SQL queries must use parameterized inputs only.",
     "context_summary": "Dashboard SQL must always use parameterized inputs.",
     "memory_type": "instruction",
-    "scope": "project:memory-layer-dashboard",
+    "scope": "project:memory-layer",
+    "classification": "safe_to_store"
+  }},
+  {{
+    "content": "claude-sonnet-4-6 added 3 unrequested helper functions during a targeted bug fix.",
+    "context_summary": "Specify 'change only the identified function, no helpers or refactoring' in task instructions.",
+    "memory_type": "observation",
+    "scope": "model:claude-sonnet-4-6",
     "classification": "safe_to_store"
   }}
 ]
@@ -81,14 +106,17 @@ Example output:
 Task reflection context:
   Task    : {task}
   Scope   : {scope}
+  Model   : {model_id}
   Files   : {files}
   Tests   : {tests}
   Outcome : {outcome}
   Notes   : {notes}
 
-Existing active lessons already stored in scope "{scope}" (do NOT re-store these;
-classify any candidate that overlates with an existing lesson as "skip"):
+Existing active lessons already stored in scope "{scope}" (do NOT re-store these):
 {existing_lessons}
+
+Existing model lessons already stored for {model_id} (do NOT re-store these):
+{existing_model_lessons}
 """
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
@@ -205,6 +233,11 @@ def main() -> int:
         action="store_true",
         help="Store safe_to_store lessons via the write policy (default: dry-run only)",
     )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Override CHAT_MODEL just for this reflection (e.g. claude-haiku-4-5-20251001)",
+    )
     args = parser.parse_args()
 
     # ── 1. Print structured reflection header ─────────────────────────────────
@@ -220,24 +253,44 @@ def main() -> int:
     _sep()
 
     # ── 2. Call LLM to extract candidate lessons ───────────────────────────────
-    print("Extracting candidate lessons via LLM…")
+    cfg_for_reflect = get_config()
+    model_id = args.model or cfg_for_reflect.chat_model
+
+    # Guard: non-Anthropic models don't reliably return JSON for structured extraction.
+    # Known-good prefixes for models that follow strict JSON output instructions.
+    _STRUCTURED_OUTPUT_PREFIXES = ("claude-", "gpt-", "o1-", "o3-", "gemini-")
+    if not any(model_id.lower().startswith(p) for p in _STRUCTURED_OUTPUT_PREFIXES):
+        print(
+            f"\n[WARNING] CHAT_MODEL={model_id!r} may not support structured JSON output.\n"
+            f"  make reflect requires a model that follows strict JSON output instructions.\n"
+            f"  Recommended: set CHAT_MODEL=claude-haiku-4-5-20251001 in your .env\n"
+            f"  or pass --model claude-haiku-4-5-20251001 to override for this run.\n",
+            file=sys.stderr,
+        )
+
+    print(f"Extracting candidate lessons via LLM ({model_id})…")
     existing_lessons = _fetch_existing_lessons(args.scope)
+    existing_model_lessons = _fetch_existing_lessons(f"model:{model_id}")
     try:
-        llm = get_llm_client()
+        if args.model and cfg_for_reflect.anthropic_api_key:
+            llm = AnthropicClient(api_key=cfg_for_reflect.anthropic_api_key, chat_model=args.model)
+        else:
+            llm = get_llm_client()
         prompt = _REFLECTION_PROMPT.format(
             task=args.task,
             scope=args.scope,
+            model_id=model_id,
             files=args.files or "(not specified)",
             tests=args.tests or "(not specified)",
             outcome=args.outcome,
             notes=args.notes or "(none)",
             existing_lessons=existing_lessons,
+            existing_model_lessons=existing_model_lessons,
         )
-        raw = llm.generate_response(prompt)
+        raw = llm.generate_response(prompt, json_mode=True)
     except Exception as exc:
         print(f"[ERROR] LLM call failed: {exc}", file=sys.stderr)
         return 1
-
     try:
         candidates = _parse_candidates(raw)
     except (json.JSONDecodeError, ValueError) as exc:

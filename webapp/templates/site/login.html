@@ -1,0 +1,29 @@
+{% extends "site/base.html" %}
+{% block title %}Log in — Synapse{% endblock %}
+
+{% block content %}
+<div style="max-width:420px;margin:3rem auto">
+  <h1 style="font-size:1.4rem;font-weight:700;letter-spacing:-.02em;margin-bottom:.35rem">Welcome back</h1>
+  <p style="color:var(--muted);font-size:.88rem;margin-bottom:1.75rem">Log in to your Synapse account.</p>
+
+  {% if error %}
+    <div class="alert alert-error" style="margin-bottom:1.25rem">{{ error }}</div>
+  {% endif %}
+
+  <form method="post">
+    <div class="field">
+      <label>Username</label>
+      <input type="text" name="username" required autofocus autocomplete="username">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" name="password" required autocomplete="current-password">
+    </div>
+    <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;padding:.6rem">Log in</button>
+  </form>
+
+  <p style="text-align:center;margin-top:1.25rem;font-size:.85rem;color:var(--muted)">
+    No account? <a href="{{ url_for('webapp.signup') }}">Sign up free</a>
+  </p>
+</div>
+{% endblock %}

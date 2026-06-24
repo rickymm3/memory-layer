@@ -38,6 +38,9 @@ jobs:
           python -c "import flask; import psycopg; import requests; import dotenv"
           python -c "import mcp_server.server"
 
+      - name: Run tests
+        run: python -m pytest tests/ -v
+
       - name: Verify file structure
         run: |
           test -f db/init.sql || (echo "ERROR: db/init.sql not found" && exit 1)

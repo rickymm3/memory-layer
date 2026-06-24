@@ -1,0 +1,126 @@
+{% extends "site/base.html" %}
+{% block title %}Admin — Synapse{% endblock %}
+{% block page_class %}page-wide{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap">
+  <div>
+    <h1 style="font-size:1.3rem;font-weight:700;letter-spacing:-.02em">Admin</h1>
+    <p style="color:var(--muted);font-size:.83rem;margin-top:.2rem">All atoms across all users</p>
+  </div>
+  <a href="{{ url_for('webapp.discussions') }}" style="margin-left:auto;color:var(--muted);font-size:.85rem">← Discussions</a>
+</div>
+
+<!-- Stats -->
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:.75rem;margin-bottom:1.75rem">
+  {% for label, val, color in [
+    ('Total', stats.total, 'var(--text)'),
+    ('Public', stats.public, 'var(--green)'),
+    ('Private', stats.private, 'var(--muted)'),
+    ('Novel', stats.novel, 'var(--novel)'),
+    ('Discussions', stats.discussions, 'var(--accent)'),
+    ('Users', stats.users, 'var(--amber)'),
+  ] %}
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:.75rem 1rem;text-align:center">
+    <div style="font-size:1.5rem;font-weight:700;color:{{ color }}">{{ val }}</div>
+    <div style="font-size:.72rem;color:var(--muted);margin-top:.1rem;text-transform:uppercase;letter-spacing:.05em">{{ label }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Filters -->
+<form method="get" style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1.25rem;align-items:flex-end">
+  <div>
+    <label style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);display:block;margin-bottom:.25rem">Visibility</label>
+    <select name="vis" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:.35rem .6rem;font-size:.85rem">
+      <option value="">All</option>
+      <option value="public" {% if vis_filter=='public' %}selected{% endif %}>Public</option>
+      <option value="private" {% if vis_filter=='private' %}selected{% endif %}>Private</option>
+    </select>
+  </div>
+  <div>
+    <label style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);display:block;margin-bottom:.25rem">Type</label>
+    <select name="type" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:.35rem .6rem;font-size:.85rem">
+      <option value="">All</option>
+      {% for t in ['fact','decision','observation','instruction','preference','opinion'] %}
+        <option value="{{ t }}" {% if type_filter==t %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);display:block;margin-bottom:.25rem">User</label>
+    <select name="user" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:.35rem .6rem;font-size:.85rem">
+      <option value="">All</option>
+      {% for u in users %}
+        <option value="{{ u }}" {% if user_filter==u %}selected{% endif %}>{{ u }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn btn-ghost btn-sm">Filter</button>
+  {% if vis_filter or type_filter or user_filter %}
+    <a href="{{ url_for('webapp.admin') }}" class="btn btn-ghost btn-sm">Clear</a>
+  {% endif %}
+  <span style="margin-left:auto;font-size:.82rem;color:var(--muted);align-self:center">{{ total }} results</span>
+</form>
+
+<!-- Atom table -->
+<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+  <table>
+    <thead>
+      <tr>
+        <th>Content</th>
+        <th style="width:90px">User</th>
+        <th style="width:100px">Type</th>
+        <th style="width:65px">Conf</th>
+        <th style="width:130px">Scope</th>
+        <th style="width:140px">Date</th>
+        <th style="width:95px">Visibility</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for atom in atoms %}
+      <tr>
+        <td style="max-width:380px">
+          <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:380px;font-size:.85rem" title="{{ atom.content }}">
+            {% if atom.interest_flag %}<span style="color:var(--novel);font-weight:700" title="Novel">★</span> {% endif %}{{ atom.content }}
+          </span>
+        </td>
+        <td style="font-size:.78rem;color:var(--muted)">{{ atom.source_user }}</td>
+        <td><span class="badge badge-{{ atom.memory_type }}">{{ atom.memory_type }}</span></td>
+        <td>
+          <span class="{% if atom.confidence >= 0.7 %}conf-high{% elif atom.confidence >= 0.4 %}conf-mid{% else %}conf-low{% endif %}" style="font-weight:600;font-size:.85rem">
+            {{ "%.0f%%" | format(atom.confidence * 100) }}
+          </span>
+        </td>
+        <td style="font-size:.72rem;color:var(--muted);font-family:var(--mono)">{{ atom.scope | truncate(22) }}</td>
+        <td style="font-size:.78rem;color:var(--muted)">{{ atom.created_at }}</td>
+        <td>
+          <form method="post" action="{{ url_for('webapp.admin_toggle_visibility', atom_id=atom.id) }}" style="margin:0">
+            {% if atom.visibility == 'public' %}
+              <input type="hidden" name="visibility" value="private">
+              <button type="submit" class="vis-btn vis-public">🌐 public</button>
+            {% else %}
+              <input type="hidden" name="visibility" value="public">
+              <button type="submit" class="vis-btn vis-private">🔒 private</button>
+            {% endif %}
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<div style="display:flex;gap:.4rem;margin-top:1rem;justify-content:center">
+  {% if page > 1 %}
+    <a href="?page={{ page-1 }}&vis={{ vis_filter }}&type={{ type_filter }}&user={{ user_filter }}" class="btn btn-ghost btn-sm">← Prev</a>
+  {% endif %}
+  <span style="font-size:.83rem;color:var(--muted);padding:.28rem .6rem">{{ page }} / {{ total_pages }}</span>
+  {% if page < total_pages %}
+    <a href="?page={{ page+1 }}&vis={{ vis_filter }}&type={{ type_filter }}&user={{ user_filter }}" class="btn btn-ghost btn-sm">Next →</a>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

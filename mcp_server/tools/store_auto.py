@@ -18,17 +18,25 @@ def store_memory_auto(
     reconciliation_reason: str | None = None,
     matched_memory_ids: list[str] | None = None,
     task_run_id: str | None = None,
+    source_user_id: str | None = None,
+    visibility: str = "private",
 ) -> dict[str, Any]:
     """Store a candidate through the full commit pipeline and return a write report.
 
-    All candidates pass through reconciliation, critic review, and the risk gate
-    before any write occurs — the pipeline decides the final write action.
-    Previously 'new' and 'refinement' were auto-stored and 'conflict'/'opinion_change'
-    were rejected here; now the pipeline applies those rules uniformly.
+    All candidates pass through the epistemic classifier, then reconciliation,
+    critic review, and the risk gate before any write occurs.
+
+    The epistemic classifier NEVER rejects for quality reasons — only for:
+      - Secrets/credentials (GUARDRAILS patterns)
+      - Empty content
+      - Invalid scope format
+
+    Everything else is stored with appropriate type and confidence based on
+    the epistemic tier detected (VERIFIED, REPORTED, BELIEVED, OBSERVED).
 
     Args:
         content: Full canonical sentence of the candidate to store.
-        memory_type: Memory type (fact, decision, instruction, etc.).
+        memory_type: Memory type (fact, decision, instruction, belief, etc.).
         relationship: Reconciler output hint (informational; pipeline re-reconciles).
         context_summary: Compact prompt-friendly summary. Defaults to content.
         scope: Optional scope string (e.g. 'project:memory-layer').
@@ -37,12 +45,13 @@ def store_memory_auto(
         reconciliation_reason: Reconciler's reason string, if any.
         matched_memory_ids: Related existing atom UUIDs from reconciliation.
     """
-    # ── Write quality pre-gate ────────────────────────────────────────────────
-    quality = score_write_quality(content, memory_type=memory_type, stated_importance=importance)
+    # ── Epistemic classifier (replaces old quality gate) ──────────────────────
+    quality = score_write_quality(content, memory_type=memory_type, stated_importance=importance, scope=scope)
     if quality.decision == "reject":
+        # Hard safety block only — secrets, empty, invalid scope
         return {
             "stored": False,
-            "write_action": "rejected_by_quality_gate",
+            "write_action": "rejected_by_guardrail",
             "decision": "rejected",
             "memory_atom_id": None,
             "memory_signal_id": None,
@@ -50,31 +59,46 @@ def store_memory_auto(
             "content": content,
             "memory_type": memory_type,
             "scope": scope,
-            "rejection_reason": f"write quality too low ({quality.quality_score:.2f}): "
-                                 + "; ".join(quality.signals),
+            "rejection_reason": "; ".join(quality.signals),
             "critic_notes": [],
             "quality_score": quality.quality_score,
             "quality_signals": quality.signals,
         }
-    # Downgrade: cap importance at quality_score if scorer recommends it
+
+    # Use classifier's confidence suggestion if provided (e.g. for belief-tier content)
+    effective_confidence = quality.suggested_confidence if quality.suggested_confidence is not None else confidence
+    # Cap importance for downgraded content
     effective_importance = (
         quality.adjusted_importance
         if quality.adjusted_importance is not None
         else importance
     )
+    # Use classifier's suggested type if caller didn't declare a specific type
+    effective_type = (
+        quality.suggested_memory_type
+        if quality.suggested_memory_type and memory_type in ("fact", "")
+        else memory_type
+    )
 
     candidate = {
         "content": content,
-        "memory_type": memory_type,
+        "memory_type": effective_type,
         "scope": scope,
-        "confidence": confidence,
+        "confidence": effective_confidence,
         "importance": effective_importance,
         "context_summary": context_summary or "",
         "should_store": True,
+        # Hints for the critic LLM (only set when classifier detected something)
+        "reframe_hint": quality.reframe_hint,
+        "suggested_memory_type": quality.suggested_memory_type,
     }
 
     try:
-        decision = MemoryCommitPipeline().commit_candidate(candidate)
+        decision = MemoryCommitPipeline().commit_candidate(
+            candidate,
+            source_user_id=source_user_id,
+            visibility=visibility,
+        )
     except Exception as exc:
         return {"stored": False, "error": str(exc)}
 
@@ -95,4 +119,10 @@ def store_memory_auto(
         "critic_notes": d.get("critic_notes", []),
         "quality_score": quality.quality_score,
         "quality_signals": quality.signals,
+        "epistemic_tier": (
+            "OBSERVED" if scope and scope.startswith("model:") else
+            "VERIFIED" if quality.quality_score >= 0.7 else
+            "REPORTED" if quality.quality_score >= 0.5 else
+            "BELIEVED"
+        ),
     }

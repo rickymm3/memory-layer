@@ -110,6 +110,8 @@ class MemoryStore:
         task_run_id: str | None = None,
         source_url: str | None = None,
         atom_source_type: str | None = None,
+        source_user_id: str | None = None,
+        visibility: str = "private",
     ) -> tuple[str, str]:
         """Store a memory_atom and a linked memory_signal in a single transaction.
 
@@ -128,19 +130,21 @@ class MemoryStore:
         embedding = self.ollama.embed_text(content)
         embedding_literal = self._vector_literal(embedding)
         metadata_json = json.dumps(signal_metadata) if signal_metadata else None
+        _relationship = relationship or "new"
 
         with psycopg.connect(self.config.database_url) as conn:
             with conn.cursor() as cur:
                 # Insert memory_atom first
                 _atom_source_type = atom_source_type or source_type
+                _visibility = visibility if visibility in ("private", "team", "public") else "private"
                 cur.execute(
                     """
                     INSERT INTO memory_atoms (
                         content, context_summary, memory_type, scope,
                         confidence, importance, embedding_model, embedding,
-                        source_type, source_url
+                        source_type, source_url, visibility
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector, %s, %s, %s)
                     RETURNING id;
                     """,
                     (
@@ -154,6 +158,7 @@ class MemoryStore:
                         embedding_literal,
                         _atom_source_type,
                         source_url,
+                        _visibility,
                     ),
                 )
                 memory_id = cur.fetchone()[0]
@@ -166,9 +171,9 @@ class MemoryStore:
                         content, context_summary, memory_type, scope,
                         relationship, confidence, importance,
                         raw_input, reconciliation_reason, metadata,
-                        task_run_id
+                        task_run_id, source_user_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
                     RETURNING id;
                     """,
                     (
@@ -179,13 +184,14 @@ class MemoryStore:
                         context_summary,
                         memory_type,
                         scope,
-                        relationship,
+                        _relationship,
                         confidence,
                         importance,
                         raw_input,
                         reconciliation_reason,
                         metadata_json,
                         task_run_id,
+                        source_user_id,
                     ),
                 )
                 signal_id = cur.fetchone()[0]
@@ -220,7 +226,7 @@ class MemoryStore:
 
                 cur.execute(
                     """
-                    SELECT relationship, confidence, source_key, created_at
+                    SELECT relationship, confidence, source_key, created_at, source_user_id
                     FROM memory_signals
                     WHERE memory_atom_id = %s;
                     """,
@@ -253,6 +259,7 @@ class MemoryStore:
                     "confidence": row[1],
                     "source_key": row[2],
                     "created_at": row[3],
+                    "source_user_id": row[4],
                 }
                 for row in rows
             ]
@@ -263,17 +270,19 @@ class MemoryStore:
                 cur.execute(
                     """
                     UPDATE memory_atoms
-                    SET support_weight     = %s,
-                        opposition_weight  = %s,
-                        disagreement_score = %s,
-                        confidence         = %s,
-                        retrieval_priority = %s,
-                        last_recomputed_at = now()
+                    SET support_weight      = %s,
+                        opposition_weight   = %s,
+                        disagreement_score  = %s,
+                        confidence          = %s,
+                        retrieval_priority  = %s,
+                        unique_source_count = %s,
+                        last_recomputed_at  = now()
                     WHERE id = %s
                     RETURNING
                         id, content, context_summary, memory_type, scope,
                         confidence, importance, support_weight, opposition_weight,
-                        disagreement_score, last_recomputed_at, created_at;
+                        disagreement_score, last_recomputed_at, created_at,
+                        unique_source_count;
                     """,
                     (
                         weights["support_weight"],
@@ -281,6 +290,7 @@ class MemoryStore:
                         weights["disagreement_score"],
                         weights["confidence"],
                         weights.get("retrieval_priority", 1.0),
+                        weights.get("unique_source_count", 0),
                         atom_id,
                     ),
                 )
@@ -303,6 +313,7 @@ class MemoryStore:
             "disagreement_score": float(row[9]),
             "last_recomputed_at": row[10].isoformat() if row[10] else None,
             "created_at": row[11].isoformat() if row[11] else None,
+            "unique_source_count": int(row[12]) if row[12] is not None else 0,
         }
 
     def find_near_duplicates(
@@ -442,7 +453,8 @@ class MemoryStore:
                         scope,
                         content,
                         context_summary,
-                        created_at
+                        created_at,
+                        unique_source_count
                     FROM memory_atoms
                     {where_sql}
                     ORDER BY created_at DESC
@@ -462,6 +474,7 @@ class MemoryStore:
                     "content": row[3],
                     "context_summary": row[4],
                     "created_at": row[5].isoformat() if row[5] is not None else None,
+                    "unique_source_count": int(row[6]) if row[6] is not None else 0,
                 }
             )
 
@@ -672,6 +685,7 @@ class MemoryStore:
         source_key: str = "local_user",
         source_type: str = "local",
         reconciliation_reason: str | None = None,
+        source_user_id: str | None = None,
     ) -> str:
         """Add a memory_signal to an existing atom (no new atom created).
 
@@ -687,16 +701,16 @@ class MemoryStore:
                         memory_atom_id, source_key, source_type,
                         content, context_summary, memory_type, scope,
                         relationship, confidence, importance,
-                        reconciliation_reason
+                        reconciliation_reason, source_user_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id;
                     """,
                     (
                         atom_id, source_key, source_type,
                         content, summary, memory_type, scope,
                         relationship, confidence, importance,
-                        reconciliation_reason,
+                        reconciliation_reason, source_user_id,
                     ),
                 )
                 signal_id = str(cur.fetchone()[0])
@@ -904,7 +918,8 @@ class MemoryStore:
                             lifecycle_status,
                             support_weight,
                             opposition_weight,
-                            disagreement_score
+                            disagreement_score,
+                            COALESCE(unique_source_count, 0) AS unique_source_count
                         FROM memory_atoms
                         WHERE (lifecycle_status IS NULL
                                OR lifecycle_status NOT IN ('superseded', 'deprecated', 'archived'))
@@ -915,6 +930,7 @@ class MemoryStore:
                             similarity * 0.60
                             + confidence * 0.25
                             - COALESCE(disagreement_score, 0.0) * 0.15
+                            + LN(GREATEST(1, unique_source_count)) * 0.02
                         ) * CASE
                             WHEN memory_type IN ('opinion','preference','lesson','belief')
                             THEN GREATEST(0.3, EXP(
@@ -932,11 +948,14 @@ class MemoryStore:
                 rows = cur.fetchall()
 
         results: list[dict[str, Any]] = []
+        returned_ids: list[str] = []
         for row in rows:
             ds = float(row[12]) if row[12] is not None else 0.0
+            atom_id = str(row[0])
+            returned_ids.append(atom_id)
             results.append(
                 {
-                    "id": str(row[0]),
+                    "id": atom_id,
                     "content": row[1],
                     "context_summary": row[2],
                     "memory_type": row[3],
@@ -944,15 +963,36 @@ class MemoryStore:
                     "confidence": float(row[5]),
                     "importance": float(row[6]),
                     "similarity": float(row[7]),
-                    "composite_score": round(float(row[13]), 4),
+                    "composite_score": round(float(row[14]), 4),
                     "created_at": row[8].isoformat() if row[8] is not None else None,
                     "lifecycle_status": row[9] or "active",
                     "support_weight": float(row[10]) if row[10] is not None else 0.0,
                     "opposition_weight": float(row[11]) if row[11] is not None else 0.0,
                     "disagreement_score": ds,
                     "disagreement_flag": ds >= 0.5,
+                    "unique_source_count": int(row[13]) if row[13] is not None else 0,
                 }
             )
+
+        # Update access tracking for lazy decay: record that these atoms were retrieved.
+        # Never-accessed atoms are candidates for annual purge. Decay formula reads
+        # last_accessed_at + access_count at retrieval time without writing back confidence.
+        if returned_ids:
+            try:
+                with psycopg.connect(self.config.database_url) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            UPDATE memory_atoms
+                            SET last_accessed_at = NOW(),
+                                access_count = access_count + 1
+                            WHERE id = ANY(%s::uuid[])
+                            """,
+                            (returned_ids,),
+                        )
+                    conn.commit()
+            except Exception:
+                pass  # access tracking failure must never block retrieval
 
         return results
 
@@ -1407,6 +1447,26 @@ class MemoryStore:
                 )
                 recent_signals = cur.fetchall()
 
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FILTER (WHERE unique_source_count >= 2) AS multi_source,
+                           COUNT(*) FILTER (WHERE unique_source_count >= 3) AS tri_source,
+                           MAX(unique_source_count) AS max_sources
+                    FROM memory_atoms
+                    WHERE lifecycle_status = 'active' OR lifecycle_status IS NULL;
+                    """
+                )
+                source_stats = cur.fetchone()
+
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM memory_atoms
+                    WHERE scope LIKE 'model:%'
+                      AND (lifecycle_status = 'active' OR lifecycle_status IS NULL);
+                    """
+                )
+                model_lesson_count = int((cur.fetchone() or [0])[0])
+
                 try:
                     cur.execute(
                         """
@@ -1459,6 +1519,10 @@ class MemoryStore:
                 "coverage_pct": pct(int(signal_stats[0] or 0)),
             },
             "signal_activity_14d": {row[0]: int(row[1]) for row in recent_signals},
+            "multi_source_atoms": int(source_stats[0] or 0) if source_stats else 0,
+            "tri_source_atoms": int(source_stats[1] or 0) if source_stats else 0,
+            "max_unique_sources": int(source_stats[2] or 0) if source_stats else 0,
+            "model_lesson_count": model_lesson_count,
             "graph": {
                 "total_relations": int(graph_stats[0] or 0) if graph_stats else 0,
                 "atoms_in_graph": int(graph_stats[1] or 0) if graph_stats else 0,
@@ -2126,7 +2190,7 @@ class MemoryStore:
                            confidence, importance, support_weight, opposition_weight,
                            disagreement_score, last_recomputed_at, created_at,
                            lifecycle_status, superseded_by_atom_id, lifecycle_reason,
-                           retrieval_priority, lifecycle_updated_at
+                           retrieval_priority, lifecycle_updated_at, unique_source_count
                     FROM memory_atoms WHERE id = %s;
                     """,
                     (memory_id,),
@@ -2179,6 +2243,7 @@ class MemoryStore:
             "lifecycle_reason": row[14],
             "retrieval_priority": float(row[15]),
             "lifecycle_updated_at": row[16].isoformat() if row[16] else None,
+            "unique_source_count": int(row[17]) if row[17] is not None else 0,
             "signals_summary": sig_summary,
         }
 

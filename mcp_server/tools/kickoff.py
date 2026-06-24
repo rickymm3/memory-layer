@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 from app.llm_provider import get_llm_client
-from app.memory_store import MemoryStore
+from app.db import get_store
 
 
 def _normalize_slug(name: str) -> str:
@@ -135,7 +135,7 @@ def kickoff_project(
     if not isinstance(candidates, list):
         candidates = []
 
-    store = MemoryStore()
+    store = get_store()
     stored: list[dict[str, Any]] = []
     skipped = 0
 

@@ -754,3 +754,71 @@ def test_retrieve_with_history_returns_both_pools(store: SQLiteStore):
     result = store.retrieve_with_history("concise", min_similarity=0.0)
     assert "current" in result
     assert "historical" in result
+
+
+# ── unique_source_count ───────────────────────────────────────────────────────
+
+def test_unique_source_count_single_source(store: SQLiteStore):
+    atom_id, _ = store.store_memory_with_signal(
+        content="Single source fact.", memory_type="fact",
+        source_key="user_a",
+    )
+    atom = store.get_atom_with_signals(atom_id)
+    assert atom["unique_source_count"] == 1
+
+
+def test_unique_source_count_multi_source_increases(store: SQLiteStore):
+    atom_id, _ = store.store_memory_with_signal(
+        content="Multi-source corroborated fact.", memory_type="fact",
+        source_key="user_a",
+    )
+    store.add_signal_to_atom(
+        atom_id, content="Multi-source corroborated fact.", relationship="reinforcement",
+        source_key="user_b", source_user_id="user_b",
+    )
+    atom = store.get_atom_with_signals(atom_id)
+    assert atom["unique_source_count"] == 2
+
+
+def test_unique_source_count_same_source_no_double_count(store: SQLiteStore):
+    atom_id, _ = store.store_memory_with_signal(
+        content="Repeated source fact.", memory_type="fact",
+        source_key="user_a",
+    )
+    store.add_signal_to_atom(
+        atom_id, content="Repeated source fact.", relationship="reinforcement",
+        source_key="user_a", source_user_id="user_a",
+    )
+    store.add_signal_to_atom(
+        atom_id, content="Repeated source fact.", relationship="reinforcement",
+        source_key="user_a", source_user_id="user_a",
+    )
+    atom = store.get_atom_with_signals(atom_id)
+    # Three signals, all from user_a — should count as 1 unique source
+    assert atom["unique_source_count"] == 1
+
+
+def test_unique_source_count_in_compute_atom_weights():
+    from app.signal_aggregator import compute_atom_weights
+    signals = [
+        {"relationship": "new", "confidence": 0.8, "source_key": "a", "source_user_id": "alice", "created_at": None},
+        {"relationship": "reinforcement", "confidence": 0.8, "source_key": "b", "source_user_id": "bob", "created_at": None},
+        {"relationship": "reinforcement", "confidence": 0.8, "source_key": "a", "source_user_id": "alice", "created_at": None},
+    ]
+    result = compute_atom_weights(signals)
+    assert result["unique_source_count"] == 2
+
+
+def test_multi_source_boosts_retrieval_priority():
+    from app.signal_aggregator import compute_atom_weights
+    single_source = [
+        {"relationship": "new", "confidence": 0.8, "source_key": "a", "source_user_id": "alice", "created_at": None},
+    ]
+    multi_source = [
+        {"relationship": "new", "confidence": 0.8, "source_key": "a", "source_user_id": "alice", "created_at": None},
+        {"relationship": "reinforcement", "confidence": 0.8, "source_key": "b", "source_user_id": "bob", "created_at": None},
+        {"relationship": "reinforcement", "confidence": 0.8, "source_key": "c", "source_user_id": "carol", "created_at": None},
+    ]
+    r1 = compute_atom_weights(single_source)
+    r3 = compute_atom_weights(multi_source)
+    assert r3["retrieval_priority"] > r1["retrieval_priority"]

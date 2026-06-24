@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.llm_provider import get_llm_client
-from app.memory_store import MemoryStore
+from app.db import get_store
 from app.reconciliation import CandidateReconciler
 
 
@@ -38,7 +38,7 @@ def reconcile_candidate(
     """
     clamped_limit = max(1, min(int(retrieve_limit), 10))
 
-    store = MemoryStore()
+    store = get_store()
     reconciler = CandidateReconciler(store=store, ollama=get_llm_client())
 
     result = reconciler.reconcile(

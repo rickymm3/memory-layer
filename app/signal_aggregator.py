@@ -57,10 +57,15 @@ SPAM_CONFLICT_RATIO_THRESHOLD: float = 0.7
 SOURCE_TRUST_FLOOR: float = 0.1
 
 
-def _recency_weight(created_at: datetime | None, half_life_days: float = RECENCY_HALF_LIFE_DAYS) -> float:
+def _recency_weight(created_at: "datetime | str | None", half_life_days: float = RECENCY_HALF_LIFE_DAYS) -> float:
     """Exponential decay factor: 1.0 for brand-new signals, halves every half_life_days."""
     if created_at is None:
         return 1.0
+    if isinstance(created_at, str):
+        try:
+            created_at = datetime.fromisoformat(created_at)
+        except (ValueError, TypeError):
+            return 1.0
     now = datetime.now(timezone.utc)
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
@@ -110,10 +115,11 @@ def compute_atom_weights(
 
     Args:
         signals: List of dicts with keys:
-            relationship (str | None)
-            confidence   (float | None)  — defaults to 0.8 if absent
-            source_key   (str | None)    — defaults to "unknown"
-            created_at   (datetime | None)
+            relationship   (str | None)
+            confidence     (float | None)  — defaults to 0.8 if absent
+            source_key     (str | None)    — defaults to "unknown"
+            source_user_id (str | None)    — explicit user identity; falls back to source_key
+            created_at     (datetime | None)
         memory_type: The atom's memory_type string (e.g. "instruction", "opinion").
             Used to look up the per-type recency half-life from
             RECENCY_HALF_LIFE_DAYS_BY_TYPE. Defaults to RECENCY_HALF_LIFE_DAYS
@@ -125,10 +131,11 @@ def compute_atom_weights(
 
     Returns:
         {
-            "support_weight":    float,
-            "opposition_weight": float,
-            "disagreement_score": float,  # 0.0 when no scoreable signals
-            "confidence":        float,   # clamped 0.1–0.99
+            "support_weight":      float,
+            "opposition_weight":   float,
+            "disagreement_score":  float,  # 0.0 when no scoreable signals
+            "confidence":          float,  # clamped 0.1–0.99
+            "unique_source_count": int,    # distinct user identities with scoreable signals
         }
     """
     half_life = RECENCY_HALF_LIFE_DAYS_BY_TYPE.get(
@@ -144,6 +151,7 @@ def compute_atom_weights(
     )
 
     source_counts: dict[str, int] = {}
+    unique_identities: set[str] = set()
     support_weight = 0.0
     opposition_weight = 0.0
 
@@ -155,6 +163,10 @@ def compute_atom_weights(
         source_key = (sig.get("source_key") or "unknown").strip()
         n = source_counts.get(source_key, 0)
         source_counts[source_key] = n + 1
+
+        # Track unique identities: prefer explicit source_user_id; fall back to source_key.
+        identity = (sig.get("source_user_id") or source_key).strip()
+        unique_identities.add(identity)
 
         # Geometric source decay: first from this source = 1.0, second = 0.5, …
         source_decay = 0.5 ** n
@@ -169,6 +181,7 @@ def compute_atom_weights(
         else:
             opposition_weight += weight
 
+    unique_source_count = len(unique_identities)
     total = support_weight + opposition_weight
     disagreement_score = (opposition_weight / total) if total > 0.0 else 0.0
 
@@ -179,9 +192,21 @@ def compute_atom_weights(
     confidence = 0.5 + 0.5 * support_score - 0.5 * opposition_penalty
     confidence = max(0.1, min(0.99, confidence))
 
+    # retrieval_priority: pre-computed ranking multiplier stored on the atom.
+    # Multi-source corroboration boosts priority logarithmically (diminishing returns).
+    # High-confidence, low-conflict, multi-source atoms rank highest.
+    import math
+    corroboration_bonus = 1.0 + math.log(max(1, unique_source_count)) * 0.1
+    retrieval_priority = round(
+        confidence * max(0.3, 1.0 - disagreement_score * 0.5) * corroboration_bonus, 3
+    )
+    retrieval_priority = min(retrieval_priority, 1.0)
+
     return {
         "support_weight": round(support_weight, 6),
         "opposition_weight": round(opposition_weight, 6),
         "disagreement_score": round(disagreement_score, 6),
         "confidence": round(confidence, 3),
+        "unique_source_count": unique_source_count,
+        "retrieval_priority": retrieval_priority,
     }

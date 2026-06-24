@@ -162,7 +162,7 @@ class CandidateReconciler:
             scope=scope,
             related_memories=related_memories,
         )
-        response = self.ollama.generate_response(prompt)
+        response = self.ollama.generate_response(prompt, json_mode=True)
         parsed = _extract_json_object(response)
         result = _sanitize_reconciliation(parsed)
         result["related_memories"] = related_memories

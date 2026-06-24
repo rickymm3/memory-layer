@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.memory_store import MemoryStore
+from app.db import get_store
 from app.llm_provider import get_llm_client
 
 
@@ -43,7 +43,7 @@ def get_belief_detail(
     if not atom_id and not query:
         return {"error": "Provide either atom_id or query."}
 
-    store = MemoryStore(ollama_client=get_llm_client())
+    store = get_store()
 
     resolved_id: str | None = atom_id
 

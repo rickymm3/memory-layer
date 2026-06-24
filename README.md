@@ -1,233 +1,97 @@
 # memory-layer
 
-A persistent, LLM-agnostic memory store that gives AI assistants durable memory across sessions, projects, and models.
+Persistent shared memory for agentic workflows. Drop one block into your MCP config — your AI agents remember everything across sessions, tools, and models.
 
 ---
 
-## The problem
+## Install
 
-LLMs are stateless. Every chat session begins blank. If you've explained your project architecture, preferences, or decisions a hundred times, the next session knows none of it. And if you switch from Claude to Copilot to GPT-4, you start from zero again with each one.
-
-memory-layer fixes this by maintaining a single shared knowledge store that any LLM can read from and write to — a shared brain that accumulates everything worth remembering.
-
----
-
-## What it is
-
-A local PostgreSQL + pgvector database with:
-
-- **Semantic retrieval** — embed your query, find the most relevant stored facts
-- **A write pipeline** — every candidate memory is reconciled against what's already stored, reviewed by a critic LLM, and risk-gated before anything is written
-- **An MCP server** — connects to GitHub Copilot, Claude, and any MCP-compatible tool
-- **A Flask dashboard** — browse atoms, signals, proposals, traces, and task history
-- **A transcript ingest path** — import conversations from any LLM and extract what's worth keeping
-
----
-
-## Stack
-
-| Component | Role |
-|---|---|
-| **PostgreSQL + pgvector** | Structured storage + cosine similarity search |
-| **Ollama** | Local LLM for chat, extraction, reconciliation, and critique |
-| **Python 3.12** | All application code |
-| **MCP SDK** | Model Context Protocol server (stdio transport) |
-| **Flask** | Read-only dashboard on port 5001 |
-| **Docker Compose** | Runs PostgreSQL + pgvector locally |
-
-Default models: `qwen3:8b` (chat/extraction/reconciliation), `qwen3-embedding:latest` (4096-dim embeddings).
-
-Any Ollama model works. Any OpenAI-compatible API server works (LM Studio, llama.cpp, Jan, etc.).
-
----
-
-## Quick start
-
-### 1. Prerequisites
-
-- Docker and Docker Compose
-- Python 3.12+
-- [Ollama](https://ollama.ai) running locally with your chosen model pulled
-
-### 2. Clone and configure
-
-```bash
-git clone git@github.com:rickymm3/memory-layer.git
-cd memory-layer
-cp .env.example .env
-```
-
-Edit `.env` — the minimum required settings:
-
-```env
-DATABASE_URL=postgresql://memory:memory_dev_password@localhost:5432/memory_layer_development
-OLLAMA_HOST=http://localhost:11434
-CHAT_MODEL=qwen3:8b
-EMBEDDING_MODEL=qwen3-embedding:latest
-```
-
-On WSL2 (Windows), Ollama runs on the Windows host — replace `localhost` with your gateway IP:
-
-```env
-OLLAMA_HOST=http://172.22.0.1:11434   # WSL2 only — run: ip route | grep default
-```
-
-See the **LLM provider setup** section below for Claude, OpenAI, and LM Studio configs.
-
-### 3. Start the database
-
-```bash
-docker compose up -d
-```
-
-### 4. Install Python dependencies
-
-```bash
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### 5. Verify the stack
-
-```bash
-make doctor
-# Expect: all PASS, 0 FAIL
-```
-
-### 6. Start a chat session
-
-```bash
-make session
-```
-
-Example session output:
-
-```
-memory-layer › session started
-Retrieved 3 memories for context.
-
-You: this project uses parameterized SQL only, never f-strings
-
-[EXTRACT] candidate: "This project uses parameterized SQL only; f-string interpolation is prohibited."
-[RECONCILE] relationship: new — no similar atoms found
-[WRITE POLICY] auto-store: low-risk new fact
-[STORED] atom_id: a3f2b1c4-7e2d-4a1b-9f5e-6c3d8b2a1e9d | signal_id: 9e8d7f6a-5b4c-3d2e-1f0a-bcde1234f567
-
-You: what does this architecture use?
-
-[RETRIEVE] "This project uses parameterized SQL only; f-string interpolation is prohibited."
-[RETRIEVE] "Use Postgres + pgvector, not SQLite"
-[RETRIEVE] "Always run 'make doctor' after schema changes"
-
-Based on prior context:
-- Architecture: PostgreSQL + pgvector for durable semantic memory
-- Key constraint: parameterized SQL always, no f-string interpolation
-- Workflow: validate schema with 'make doctor' before committing
-```
-
----
-
-## Connecting to GitHub Copilot (MCP)
-
-Add this to `.vscode/mcp.json` in your project:
+Add to your Claude Desktop config and restart:
 
 ```json
 {
-  "servers": {
-    "memoryLayer": {
-      "type": "stdio",
-      "command": "/path/to/memory-layer/.venv/bin/python",
-      "args": ["-m", "mcp_server.server"],
-      "envFile": "/path/to/memory-layer/.env"
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "memory-layer"],
+      "env": {
+        "ANTHROPIC_API_KEY": "sk-ant-...",
+        "OPENAI_API_KEY": "sk-..."
+      }
     }
   }
 }
 ```
 
-VS Code launches the server as a subprocess over stdio — no port, no daemon.
+Memory is stored at `~/.memory-layer/memory.db`. No Docker, no Postgres, no install step. Requires Node.js 18+.
 
-Install the workflow instructions so Copilot knows when and how to use memory tools:
+**Claude Desktop config location:**
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
-```bash
-make install-vscode-prompts
+**Claude Code** — same block in `~/.claude/settings.json` under `mcpServers`.
+
+**Python/uv users** (alternative, no Node.js required):
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "uvx",
+      "args": ["memory-layer"],
+      "env": { "ANTHROPIC_API_KEY": "sk-ant-...", "OPENAI_API_KEY": "sk-..." }
+    }
+  }
+}
 ```
 
 ---
 
-## LLM provider setup
+## Environment variables
 
-The memory layer separates chat and embeddings into two independent providers. Set them independently in `.env`.
+| Variable | Default | Notes |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | — | Required for Anthropic chat |
+| `OPENAI_API_KEY` | — | Required for OpenAI chat or embeddings |
+| `CHAT_PROVIDER` | `auto` | `anthropic` \| `openai` \| `openai_compat` \| `ollama` |
+| `EMBEDDING_PROVIDER` | `auto` | `openai` \| `openai_compat` \| `ollama` |
+| `EMBEDDING_MODEL` | `qwen3-embedding:latest` | Any model your provider supports |
+| `DATABASE_URL` | SQLite at `~/.memory-layer/memory.db` | Set to `postgresql://...` for Postgres |
+| `SQLITE_DB_PATH` | `~/.memory-layer/memory.db` | Override the SQLite path |
+| `OLLAMA_HOST` | auto-detected | `http://localhost:11434` for local Ollama |
 
-> **Important — embedding model consistency**: once you store atoms with one embedding model, **do not change `EMBEDDING_MODEL`**. All stored vectors become incompatible. If you switch models, wipe the database and re-embed from scratch.
+---
 
-### Ollama only (default — no API keys needed)
+## Upgrade to Postgres (production / shared)
 
-```env
-OLLAMA_HOST=http://localhost:11434
-CHAT_MODEL=qwen3:8b
-EMBEDDING_MODEL=qwen3-embedding:latest
-```
-
-Pull the required models:
-
-```bash
-ollama pull qwen3:8b
-ollama pull qwen3-embedding:latest
-```
-
-### Anthropic Claude (chat) + Ollama (embeddings)
-
-Anthropic has no public embeddings API, so you still need Ollama running locally for embeddings.
-
-```env
-CHAT_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-CHAT_MODEL=claude-opus-4-6          # or claude-sonnet-4-6, claude-haiku-4-5-20251001
-
-EMBEDDING_PROVIDER=ollama           # required — Anthropic cannot embed
-EMBEDDING_MODEL=qwen3-embedding:latest
-OLLAMA_HOST=http://localhost:11434
-```
-
-### OpenAI API (chat + embeddings)
-
-```env
-CHAT_PROVIDER=openai
-OPENAI_API_KEY=sk-...
-CHAT_MODEL=gpt-4o
-
-EMBEDDING_PROVIDER=openai
-EMBEDDING_MODEL=text-embedding-3-small
-```
-
-### LM Studio / llama.cpp / Jan (local OpenAI-compatible server)
-
-```env
-CHAT_PROVIDER=openai_compat
-OPENAI_COMPAT_BASE_URL=http://localhost:1234
-OPENAI_COMPAT_API_KEY=none          # leave as "none" for local servers
-CHAT_MODEL=your-loaded-model-name
-
-EMBEDDING_PROVIDER=openai_compat
-EMBEDDING_MODEL=your-embedding-model-name
-```
-
-### Claude Desktop (MCP)
-
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (Mac) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+For team use or when you need shared memory across machines:
 
 ```json
 {
   "mcpServers": {
-    "memory-layer": {
-      "command": "/absolute/path/to/memory-layer/.venv/bin/python",
-      "args": ["-m", "mcp_server.server"],
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "memory-layer"],
       "env": {
-        "DATABASE_URL": "postgresql://memory:memory_dev_password@localhost:5432/memory_layer_development",
-        "OLLAMA_HOST": "http://localhost:11434",
-        "CHAT_MODEL": "qwen3:8b",
-        "EMBEDDING_MODEL": "qwen3-embedding:latest"
+        "DATABASE_URL": "postgresql://user:pass@host:5432/dbname",
+        "ANTHROPIC_API_KEY": "sk-ant-...",
+        "OPENAI_API_KEY": "sk-..."
+      }
+    }
+  }
+}
+```
+
+Or with uvx + postgres extra:
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "uvx",
+      "args": ["--with", "memory-layer[postgres]", "memory-layer"],
+      "env": {
+        "DATABASE_URL": "postgresql://user:pass@host:5432/dbname",
+        "ANTHROPIC_API_KEY": "sk-ant-...",
+        "OPENAI_API_KEY": "sk-..."
       }
     }
   }
@@ -236,182 +100,29 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (Mac) o
 
 ---
 
-## Importing conversations from other LLMs
+## What it does
 
-To bring memories from a Claude, GPT-4, or any other conversation into the store:
+memory-layer exposes 20 MCP tools that let any LLM read from and write to a shared knowledge store:
 
-**Via CLI:**
+- **Retrieval** — `memory_search`, `memory_project_context`, `memory_task_context`
+- **Storage** — `memory_store_auto` (low-risk, direct write), `memory_propose_signal` (high-risk, queued for review)
+- **Reflection** — `memory_reflect_turn`, `memory_ingest_transcript`
+- **Audit** — `memory_get_belief`, `memory_get_signals`, `memory_health`
+
+Every write is dual: one `memory_atom` (the canonical belief) + one `memory_signal` (the evidence that produced it). Signals aggregate into confidence scores; contested beliefs are flagged automatically.
+
+---
+
+## Dev / self-host
 
 ```bash
-# Export your conversation as JSON, then:
-python scripts/ingest_transcript.py --file transcript.json --source claude-opus-4-6
-
-# Dry-run first to see what would be extracted:
-python scripts/ingest_transcript.py --file transcript.json --dry-run
+git clone https://github.com/rickymm3/memory-layer.git
+cd memory-layer
+cp .env.example .env   # edit with your keys
+pip install -e ".[dev]"
+make doctor            # verify stack
+make session           # interactive chat with memory
+make dashboard         # read-only UI on :5001
 ```
 
-**Transcript format** (JSON array):
-
-```json
-[
-  {"role": "user", "content": "We decided to use Postgres, not SQLite."},
-  {"role": "assistant", "content": "Got it, I'll remember that."},
-  {"role": "user", "content": "Also, always use parameterized queries."}
-]
-```
-
-**Via MCP** (from any connected LLM):
-
-```
-Call memory_ingest_transcript with the turns array and source_label="claude-opus-4-6"
-```
-
-Every imported candidate goes through the full pipeline — reconciliation, critic review, risk gate — before any write. Nothing is stored silently.
-
----
-
-## Scope system
-
-Scope is the isolation boundary between contexts:
-
-| Scope | Meaning |
-|---|---|
-| `project:<slug>` | Facts for one project (e.g. `project:my-rails-app`) |
-| `model:<name>` | Known behaviours/lessons for a specific model (e.g. `model:qwen3-8b`) |
-| `user` | Cross-project user preferences and patterns |
-| `global` | Universal facts surfaced in all contexts |
-
-When you retrieve memories, both `project:<your-project>` and `user` scope are searched together — your personal preferences follow you into every project automatically.
-
----
-
-## The write pipeline
-
-Nothing is stored without passing through this pipeline:
-
-```
-Candidate memory
-    │
-    ├─ Reconcile: duplicate / refinement / conflict / new?
-    │
-    ├─ Critic LLM: durable? clear? safe? non-obvious?
-    │
-    ├─ Risk gate: commit / reinforce / propose / reject
-    │
-    └─ Write: memory_atom + memory_signal (single transaction)
-              or → memory_proposals queue (requires human review)
-```
-
-**Auto-stored**: new facts and refinements that pass all checks.
-**Queued for review**: conflicts, opinion changes, high-risk candidates.
-**Rejected**: vague, obvious, sensitive, or temporary items.
-
----
-
-## Dashboard
-
-```bash
-make dashboard
-# Opens at http://localhost:5001
-```
-
-Browse: atoms, signals, proposals, context traces, response traces, task runs, commits, model lessons.
-
----
-
-## Common commands
-
-```bash
-make session              # Interactive chat with memory retrieval + extraction
-make dashboard            # Flask dashboard on port 5001
-make doctor               # Health check (Postgres + Ollama + schema)
-make list                 # Show recent memory atoms
-make list-signals         # Show recent memory signals
-make review-proposals     # Review and approve/reject pending proposals
-make reflect ARGS="..."   # Post-task reflection (extract lessons from what just happened)
-make mcp                  # Start MCP server manually
-
-# Import a conversation transcript
-python scripts/ingest_transcript.py --file transcript.json --source gpt-4o
-
-# Direct writes
-python scripts/store_memory.py "content" --type fact --scope project:myapp
-python scripts/delete_memory.py <uuid>
-python scripts/retrieve_memory.py "query string"
-```
-
----
-
-## Web research (optional)
-
-Enable web search fallback for the dashboard chat:
-
-```env
-WEB_RESEARCH_ENABLED=true
-WEB_SEARCH_PROVIDER=brave        # or: tavily
-WEB_SEARCH_API_KEY=your_api_key
-```
-
-Web results are used in responses but are never auto-stored as memory atoms. Any durable lessons found via research must go through the write pipeline explicitly.
-
----
-
-## Environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `DATABASE_URL` | `postgresql://memory:memory_dev_password@localhost:5432/memory_layer_development` | PostgreSQL connection string |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL (WSL2: use Windows host IP) |
-| `CHAT_PROVIDER` | `auto` | `auto` \| `ollama` \| `anthropic` \| `openai` \| `openai_compat` |
-| `EMBEDDING_PROVIDER` | `auto` | `auto` \| `ollama` \| `openai` \| `openai_compat` (Anthropic excluded) |
-| `CHAT_MODEL` | `qwen3:8b` | Model for chat, extraction, reconciliation |
-| `EMBEDDING_MODEL` | `qwen3-embedding:latest` | Embedding model — **do not change after storing atoms** |
-| `ANTHROPIC_API_KEY` | — | Required when `CHAT_PROVIDER=anthropic` |
-| `OPENAI_API_KEY` | — | Required when `CHAT_PROVIDER=openai` or `EMBEDDING_PROVIDER=openai` |
-| `OPENAI_COMPAT_BASE_URL` | — | Required when `CHAT_PROVIDER=openai_compat` |
-| `OPENAI_COMPAT_API_KEY` | `none` | API key (use `none` for local servers) |
-| `MEMORY_RETRIEVAL_THRESHOLD` | `0.60` | Minimum cosine similarity for retrieval |
-| `WEB_RESEARCH_ENABLED` | `false` | Enable web search fallback |
-| `WEB_SEARCH_PROVIDER` | `none` | `brave` or `tavily` |
-| `WEB_SEARCH_API_KEY` | — | API key for the chosen web search provider |
-
----
-
-## Security notes
-
-- All data stays local — nothing leaves your machine unless you configure a hosted LLM or web search provider
-- Web search queries are screened for sensitive content before being sent to external providers
-- Raw web results are never auto-stored as memory atoms
-- MCP write tools enforce the write pipeline — Copilot cannot bypass reconciliation or the risk gate
-- Approval tokens for confirmed writes are single-use, expire in 5 minutes, and can only be generated by the local CLI
-
----
-
-## The shared brain vision
-
-The goal is not just "compressed context for one chat." It's **LLM-agnostic persistent memory as a shared belief system**.
-
-Memories from any LLM aren't automatically treated as truth — they're **evidence**. Each candidate enters the same reconciliation pipeline that handles conflict and supersession locally, now extended across sources:
-
-- **Agreement** — multiple sources confirm the same memory → confidence rises
-- **Disagreement** — sources conflict → tracked explicitly, visible, reasoned about over time
-- **Provenance** — every memory linked to its source(s) with timestamps
-- **Confidence** — computed from agreement/disagreement signals, decaying over time
-
-Any MCP-compatible LLM can propose memories — Claude, Copilot, Ollama, future models — and they all write to the same store. Decisions made in one session are available to all others. User preferences, project constraints, model-specific lessons — all in one place, under your control, on your hardware.
-
-The system is **not** a "shared database that all models blindly trust." It's a **persistent belief system that tracks disagreement and surfaces it for human review**.
-
-### What this is not
-
-- **Not a global consensus engine** — disagreement is preserved and visible, never hidden by averaging or voting
-- **Not automatic synchronization** — proposals from one model don't update memory until approved
-- **Not federated yet** — all memory is local; P2P federation is a future opt-in layer
-- **Not a fine-tuning replacement** — the models themselves don't retrain; the system compensates by retrieving persistent context
-- **Not secrets-agnostic** — credentials and sensitive data must be filtered before writing
-
----
-
-## Project status
-
-Core pipeline, MCP server, Flask dashboard, signal aggregation, lifecycle management, web research, confidence-gated responses, and transcript ingest are all implemented and tested. See [readmeplan.md](readmeplan.md) for full phase history and design decisions.
+For Postgres: `docker compose up -d` then set `DATABASE_URL` in `.env`.

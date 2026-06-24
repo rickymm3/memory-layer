@@ -60,13 +60,19 @@ def get_task_context(
     for tr in task_runs:
         outcome_counts[tr["outcome"]] = outcome_counts.get(tr["outcome"], 0) + 1
 
-    def _fmt(atoms: list[dict[str, Any]]) -> list[Any]:
+    def _fmt(atoms: list[dict[str, Any]], prefer_injection: bool = False) -> list[Any]:
         if not compact:
             return atoms
         result = []
         for a in atoms:
             flag = " ⚠ conflict" if a.get("disagreement_flag") else ""
-            result.append(f"[{a['memory_type']}] ({float(a.get('confidence', 0.5)):.2f}) {a['content']}{flag}")
+            # For model lessons, inject the actionable context_summary (the directive
+            # that gets prepended to prompts), not the full descriptive content.
+            if prefer_injection and a.get("context_summary"):
+                text = a["context_summary"]
+            else:
+                text = a["content"]
+            result.append(f"[{a['memory_type']}] ({float(a.get('confidence', 0.5)):.2f}) {text}{flag}")
         return result
 
     def _fmt_runs(runs: list[dict[str, Any]]) -> list[Any]:
@@ -79,7 +85,7 @@ def get_task_context(
         "model_scope": model_scope,
         "compact": compact,
         "project_context": _fmt(project_atoms),
-        "model_lessons": _fmt(model_lessons),
+        "model_lessons": _fmt(model_lessons, prefer_injection=True),
         "recent_task_runs": _fmt_runs(task_runs),
         "task_relevant_atoms": _fmt(task_relevant),
         "summary": {

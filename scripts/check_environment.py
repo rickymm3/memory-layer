@@ -111,6 +111,39 @@ def main() -> int:
 
     results: list[CheckResult] = []
 
+    # ── Anthropic API key ──────────────────────────────────────────────────────
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if anthropic_key:
+        results.append(CheckResult(
+            "ANTHROPIC_API_KEY",
+            "PASS",
+            f"set ({len(anthropic_key)} chars) — make reflect --model claude-haiku-4-5-20251001 available",
+        ))
+    else:
+        results.append(CheckResult(
+            "ANTHROPIC_API_KEY",
+            "WARN",
+            "not set in .env — make reflect will fail with non-Anthropic CHAT_MODEL. "
+            "Add ANTHROPIC_API_KEY=sk-ant-... to your .env to enable lesson extraction.",
+        ))
+
+    # ── CHAT_MODEL structured-output check ────────────────────────────────────
+    _STRUCTURED_OK = ("claude-", "gpt-", "o1-", "o3-", "gemini-")
+    if any(chat_model.lower().startswith(p) for p in _STRUCTURED_OK):
+        results.append(CheckResult(
+            "CHAT_MODEL structured output",
+            "PASS",
+            f"{chat_model} supports strict JSON output (make reflect works)",
+        ))
+    else:
+        results.append(CheckResult(
+            "CHAT_MODEL structured output",
+            "WARN",
+            f"{chat_model!r} does not reliably return JSON — make reflect will fail. "
+            "Set CHAT_MODEL=claude-haiku-4-5-20251001 (requires ANTHROPIC_API_KEY) "
+            "or pass --model claude-haiku-4-5-20251001 per invocation.",
+        ))
+
     ollama_ok = False
     ollama_tags: list[dict] = []
     embedding_sample: list[float] | None = None

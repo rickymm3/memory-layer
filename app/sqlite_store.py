@@ -46,7 +46,11 @@ CREATE TABLE IF NOT EXISTS memory_atoms (
     peak_confidence REAL,
     peak_support_weight REAL,
     source_type TEXT,
-    source_url TEXT
+    source_url TEXT,
+    last_accessed_at TEXT,
+    access_count INTEGER NOT NULL DEFAULT 0,
+    visibility TEXT NOT NULL DEFAULT 'private',
+    unique_source_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS memory_signals (
@@ -71,7 +75,8 @@ CREATE TABLE IF NOT EXISTS memory_signals (
     reconciliation_reason TEXT,
     metadata TEXT,
     created_at TEXT NOT NULL,
-    task_run_id TEXT
+    task_run_id TEXT,
+    source_user_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS memory_proposals (
@@ -385,11 +390,13 @@ class SQLiteStore:
         task_run_id: str | None = None,
         source_url: str | None = None,
         atom_source_type: str | None = None,
+        source_user_id: str | None = None,
     ) -> tuple[str, str]:
         summary = (context_summary or "").strip() or content
         embedding = self.ollama.embed_text(content)
         metadata_json = json.dumps(signal_metadata) if signal_metadata else None
         _atom_source_type = atom_source_type or source_type
+        _relationship = relationship or "new"
         now = _now()
         atom_id = _uid()
         signal_id = _uid()
@@ -413,13 +420,15 @@ class SQLiteStore:
                     (id, memory_atom_id, source_key, source_type,
                      content, context_summary, memory_type, scope,
                      relationship, confidence, importance,
-                     raw_input, reconciliation_reason, metadata, task_run_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     raw_input, reconciliation_reason, metadata, task_run_id,
+                     source_user_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (signal_id, atom_id, source_key, source_type,
                  content, context_summary, memory_type, scope,
-                 relationship, confidence, importance,
-                 raw_input, reconciliation_reason, metadata_json, task_run_id, now),
+                 _relationship, confidence, importance,
+                 raw_input, reconciliation_reason, metadata_json, task_run_id,
+                 source_user_id, now),
             )
 
         self.recompute_atom_weights(atom_id)
@@ -437,7 +446,7 @@ class SQLiteStore:
             atom_memory_type = row[1]
 
             signal_rows = conn.execute(
-                "SELECT relationship, confidence, source_key, created_at FROM memory_signals WHERE memory_atom_id = ?;",
+                "SELECT relationship, confidence, source_key, created_at, source_user_id FROM memory_signals WHERE memory_atom_id = ?;",
                 (atom_id,),
             ).fetchall()
 
@@ -451,8 +460,14 @@ class SQLiteStore:
 
         source_stats = [{"source_key": r[0], "total": r[1], "conflicts": r[2]} for r in source_agg]
         source_trust = compute_source_trust(source_stats)
-        signals = [{"relationship": r[0], "confidence": r[1], "source_key": r[2], "created_at": r[3]}
-                   for r in signal_rows]
+        signals = [
+            {
+                "relationship": r[0], "confidence": r[1],
+                "source_key": r[2], "created_at": r[3],
+                "source_user_id": r[4],
+            }
+            for r in signal_rows
+        ]
         weights = compute_atom_weights(signals, memory_type=atom_memory_type, source_trust=source_trust)
 
         now = _now()
@@ -461,12 +476,14 @@ class SQLiteStore:
                 """
                 UPDATE memory_atoms
                 SET support_weight=?, opposition_weight=?, disagreement_score=?,
-                    confidence=?, retrieval_priority=?, last_recomputed_at=?
+                    confidence=?, retrieval_priority=?, unique_source_count=?,
+                    last_recomputed_at=?
                 WHERE id=?;
                 """,
                 (weights["support_weight"], weights["opposition_weight"],
                  weights["disagreement_score"], weights["confidence"],
-                 weights.get("retrieval_priority", 1.0), now, atom_id),
+                 weights.get("retrieval_priority", 1.0),
+                 weights.get("unique_source_count", 0), now, atom_id),
             )
             row = conn.execute(
                 """
@@ -716,6 +733,7 @@ class SQLiteStore:
         scope: str | None = None, confidence: float = 0.8, importance: float = 0.5,
         source_key: str = "local_user", source_type: str = "local",
         reconciliation_reason: str | None = None,
+        source_user_id: str | None = None,
     ) -> str:
         summary = (context_summary or "").strip() or content
         signal_id = _uid()
@@ -725,12 +743,14 @@ class SQLiteStore:
                 INSERT INTO memory_signals
                     (id, memory_atom_id, source_key, source_type,
                      content, context_summary, memory_type, scope,
-                     relationship, confidence, importance, reconciliation_reason, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     relationship, confidence, importance, reconciliation_reason,
+                     source_user_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (signal_id, atom_id, source_key, source_type,
                  content, summary, memory_type, scope,
-                 relationship, confidence, importance, reconciliation_reason, _now()),
+                 relationship, confidence, importance, reconciliation_reason,
+                 source_user_id, _now()),
             )
         self.recompute_atom_weights(atom_id)
         return signal_id
@@ -1576,7 +1596,7 @@ class SQLiteStore:
                        confidence, importance, support_weight, opposition_weight,
                        disagreement_score, last_recomputed_at, created_at,
                        lifecycle_status, superseded_by_atom_id, lifecycle_reason,
-                       retrieval_priority, lifecycle_updated_at
+                       retrieval_priority, lifecycle_updated_at, unique_source_count
                 FROM memory_atoms WHERE id=?;
                 """,
                 (memory_id,),
@@ -1615,6 +1635,7 @@ class SQLiteStore:
             "lifecycle_reason": row[14],
             "retrieval_priority": float(row[15]) if row[15] is not None else 1.0,
             "lifecycle_updated_at": row[16],
+            "unique_source_count": int(row[17]) if row[17] is not None else 0,
             "signals_summary": {"count": sig_count, "top_sources": top_sources,
                                 "most_recent_signal_at": sig_recent},
         }

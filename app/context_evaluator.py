@@ -55,6 +55,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from app.db import get_store
 from app.llm_provider import LLMProvider, get_llm_client
 from app.memory_store import MemoryStore
 
@@ -467,7 +468,7 @@ class RuntimeContextEvaluator:
         store: MemoryStore | None = None,
         llm: LLMProvider | None = None,
     ) -> None:
-        self.store = store or MemoryStore()
+        self.store = store if store is not None else get_store()
         self.llm = llm or get_llm_client()
 
     def evaluate(
@@ -512,7 +513,7 @@ class RuntimeContextEvaluator:
             critic_prompt = _build_critic_prompt(task_summary, usable, det_issues)
             try:
                 critic_raw = self.llm.generate_response(
-                    critic_prompt, system=_CRITIC_SYSTEM
+                    critic_prompt, system=_CRITIC_SYSTEM, json_mode=True
                 )
                 critic = _parse_critic_response(critic_raw, valid_ids, fallback_conf)
             except Exception as exc:

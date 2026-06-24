@@ -12,7 +12,7 @@ supports_belief edges, and logs each event to belief_revision_log.
 """
 from __future__ import annotations
 
-from app.memory_store import get_store
+from app.db import get_store
 
 
 async def compact_cluster(

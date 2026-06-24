@@ -7,6 +7,11 @@
   <p>{{ total }} atom{{ 's' if total != 1 else '' }} across {{ by_scope|length }} model scope{{ 's' if by_scope|length != 1 else '' }}{% if not include_inactive %} — active only{% else %} — all lifecycle statuses{% endif %}</p>
 </hgroup>
 
+<p style="font-size:.85em;color:var(--pico-muted-color)">
+  Each lesson's <strong>injection string</strong> is what gets prepended to future prompts via
+  <code>memory_task_context(model_scope=…)</code>. Keep these verb-first and directive — not descriptive.
+</p>
+
 {# Filter bar #}
 <form method="get" action="/model_lessons" style="margin-bottom:1.5rem">
   <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end">
@@ -48,41 +53,44 @@
   {% for cat in category_order %}
   {% set atoms = cats[cat] %}
   {% if atoms %}
-  <section style="margin-bottom:1rem">
+  <section style="margin-bottom:1.25rem">
     <h6 style="margin-bottom:.5rem;color:var(--pico-muted-color);text-transform:uppercase;font-size:.72em;letter-spacing:.07em">{{ cat }}</h6>
-    <table>
-      <thead>
-        <tr>
-          <th>Content</th>
-          <th>Type</th>
-          <th>Conf</th>
-          <th>Imp</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for a in atoms %}
-        <tr {% if a.lifecycle_status != 'active' %}class="lifecycle-inactive-row"{% endif %}>
-          <td>
-            <a href="/atom/{{ a.id }}" class="monospace" style="font-size:.78em;margin-right:.4rem">{{ a.id_short }}</a>
-            {{ a.content }}
-          </td>
-          <td><span class="badge badge-{{ a.memory_type }}">{{ a.memory_type or '—' }}</span></td>
-          <td class="{% if a.confidence is not none %}{% if a.confidence >= 0.7 %}conf-high{% elif a.confidence >= 0.5 %}conf-mid{% else %}conf-low{% endif %}{% endif %}">
-            {{ '%.2f'|format(a.confidence) if a.confidence is not none else '—' }}
-          </td>
-          <td>{{ '%.2f'|format(a.importance) if a.importance is not none else '—' }}</td>
-          <td>
-            {% if a.lifecycle_status != 'active' %}
-            <span class="lifecycle-{{ a.lifecycle_status }}">{{ a.lifecycle_status }}</span>
-            {% else %}
-            <span class="lifecycle-active">active</span>
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+
+    {% for a in atoms %}
+    <div style="border:1px solid var(--pico-muted-border-color);border-radius:6px;padding:.85rem 1rem;margin-bottom:.6rem{% if a.lifecycle_status != 'active' %};opacity:.55{% endif %}">
+
+      {# Header row: id badge, type badge, confidence, source count, date #}
+      <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.5rem">
+        <a href="/atom/{{ a.id }}" class="monospace" style="font-size:.72em;background:var(--pico-code-background);padding:.1em .35em;border-radius:3px;text-decoration:none">{{ a.id_short }}</a>
+        <span class="badge badge-{{ a.memory_type }}">{{ a.memory_type or '—' }}</span>
+        <span class="{% if a.confidence is not none %}{% if a.confidence >= 0.7 %}conf-high{% elif a.confidence >= 0.5 %}conf-mid{% else %}conf-low{% endif %}{% endif %}" style="font-size:.8em">
+          conf {{ '%.2f'|format(a.confidence) if a.confidence is not none else '—' }}
+        </span>
+        {% if a.unique_source_count > 1 %}
+        <span style="font-size:.78em;color:var(--pico-primary)" title="{{ a.unique_source_count }} distinct observers">{{ a.unique_source_count }} sources</span>
+        {% endif %}
+        <span style="margin-left:auto;font-size:.75em;color:var(--pico-muted-color)">{{ a.created_at }}</span>
+        {% if a.lifecycle_status != 'active' %}
+        <span class="lifecycle-{{ a.lifecycle_status }}" style="font-size:.75em">{{ a.lifecycle_status }}</span>
+        {% endif %}
+      </div>
+
+      {# Full content — the source-of-truth atom #}
+      <p style="margin:0 0 .4rem;font-size:.88em">{{ a.content }}</p>
+
+      {# Injection string — what fires into future prompts #}
+      {% if a.context_summary %}
+      <div style="background:var(--pico-code-background);border-left:3px solid var(--pico-primary);padding:.4rem .65rem;border-radius:0 4px 4px 0;font-size:.82em;margin-top:.35rem">
+        <span style="font-size:.7em;text-transform:uppercase;letter-spacing:.06em;color:var(--pico-muted-color);display:block;margin-bottom:.2rem">injection string</span>
+        {{ a.context_summary }}
+      </div>
+      {% else %}
+      <div style="font-size:.78em;color:var(--pico-del-color);margin-top:.3rem">⚠ no injection string — set context_summary to an actionable directive</div>
+      {% endif %}
+
+    </div>
+    {% endfor %}
+
   </section>
   {% endif %}
   {% endfor %}

@@ -1,5 +1,15 @@
 {
   "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "printf '\\a'"
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "startup|resume|clear|compact",
@@ -12,15 +22,6 @@
               "project_scope": "project:memory-layer",
               "model_scope": "model:claude-sonnet-4-6",
               "task_hint": "session start — auto-loading project context"
-            }
-          },
-          {
-            "type": "mcp_tool",
-            "server": "memoryLayer",
-            "tool": "memory_recent",
-            "input": {
-              "limit": 5,
-              "scope": "project:memory-layer"
             }
           },
           {

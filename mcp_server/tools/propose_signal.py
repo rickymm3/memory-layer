@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.memory_store import MemoryStore
+from app.db import get_store
 
 
 def propose_memory_signal(
@@ -42,7 +42,7 @@ def propose_memory_signal(
         return {"error": "memory_type must not be empty"}
 
     try:
-        proposal_id = MemoryStore().store_proposal(
+        proposal_id = get_store().store_proposal(
             content=content,
             memory_type=memory_type,
             relationship=relationship,

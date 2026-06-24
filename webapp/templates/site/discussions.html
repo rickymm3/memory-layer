@@ -1,0 +1,72 @@
+{% extends "site/base.html" %}
+{% block title %}Your Discussions — Synapse{% endblock %}
+
+{% block content %}
+<div class="cols">
+  <div>
+    <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:.75rem">
+      <div>
+        <h1>Your Discussions</h1>
+        <p>Topics where your ideas have connected with others.</p>
+      </div>
+      <a href="{{ url_for('webapp.discussion_graph') }}" class="btn btn-ghost btn-sm" style="flex-shrink:0;margin-top:.25rem">
+        ⬡ Knowledge Graph
+      </a>
+    </div>
+
+    {% if discussions %}
+      {% for d in discussions %}
+      <a href="{{ url_for('webapp.discussion_detail', disc_id=d.id) }}" class="disc-card">
+        <div style="display:flex;align-items:flex-start;gap:.75rem">
+          <div style="flex:1;min-width:0">
+            <div class="disc-card-title">
+              {% if d.novelty_flag %}<span class="badge badge-novel" style="margin-right:.4rem">★ novel</span>{% endif %}
+              {{ d.title }}
+            </div>
+            <div class="disc-meta" style="margin-top:.4rem">
+              <span>{{ d.contributor_count }} contributor{{ 's' if d.contributor_count != 1 }}</span>
+              <span class="disc-meta-sep">{{ d.atom_count }} idea{{ 's' if d.atom_count != 1 }}</span>
+              <span class="disc-meta-sep">{{ d.last_activity }}</span>
+              {% for tag in d.topic_tags[:3] %}<span class="tag">{{ tag }}</span>{% endfor %}
+            </div>
+          </div>
+          {% if d.unread > 0 %}
+          <span style="background:var(--accent);color:#fff;font-size:.72rem;font-weight:700;padding:.2rem .55rem;border-radius:10px;flex-shrink:0;white-space:nowrap">
+            +{{ d.unread }} new
+          </span>
+          {% endif %}
+        </div>
+      </a>
+      {% endfor %}
+    {% else %}
+      <div class="empty">
+        <h3>No discussions yet</h3>
+        <p style="margin-top:.4rem">
+          Make some atoms public in your <a href="{{ url_for('webapp.brain') }}">brain</a>,
+          then run <code>make cluster-discussions</code> to form threads.
+        </p>
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="sidebar">
+    <div class="widget">
+      <div class="widget-title">Your Stats</div>
+      <div style="font-size:.85rem;color:var(--muted);display:grid;gap:.4rem">
+        <div>{{ discussions | length }} active discussion{{ 's' if discussions | length != 1 }}</div>
+        {% set total_unread = discussions | sum(attribute='unread') %}
+        {% if total_unread > 0 %}
+        <div style="color:var(--accent);font-weight:600">{{ total_unread }} unread update{{ 's' if total_unread != 1 }}</div>
+        {% endif %}
+      </div>
+    </div>
+    <div class="widget">
+      <div class="widget-title">Contribute More</div>
+      <p style="font-size:.83rem;color:var(--muted);margin-bottom:.75rem">
+        The more public ideas you share, the more discussions you'll join.
+      </p>
+      <a href="{{ url_for('webapp.capture') }}" class="btn btn-primary btn-sm" style="width:100%;justify-content:center">+ Capture thought</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

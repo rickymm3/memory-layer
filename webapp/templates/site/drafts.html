@@ -1,0 +1,47 @@
+{% extends "site/base.html" %}
+{% block title %}Drafts — memoryLayer{% endblock %}
+{% block main_class %}wide{% endblock %}
+
+{% block content %}
+<h1 style="font-size:1.5rem;margin-bottom:1.5rem">Draft Posts</h1>
+
+{% if posts %}
+  <div style="display:grid;gap:1rem">
+    {% for post in posts %}
+    <div class="card">
+      <div style="display:flex;align-items:flex-start;gap:.75rem">
+        <div style="flex:1">
+          <a href="{{ url_for('webapp.post_detail', post_id=post.id) }}"
+             style="font-weight:700;font-size:.95rem;text-decoration:none;color:inherit">
+            {{ post.title }}
+          </a>
+          <div style="margin-top:.35rem;display:flex;gap:.5rem;align-items:center;font-size:.8rem;color:var(--pico-muted-color)">
+            <span class="badge">{{ post.format.replace('_',' ') }}</span>
+            <span>Generated {{ post.created_at }}</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:.5rem;flex-shrink:0">
+          <form method="post" action="{{ url_for('webapp.publish_post', post_id=post.id) }}" style="margin:0">
+            <button type="submit" style="font-size:.82rem;padding:.28rem .7rem;background:var(--pico-primary);color:#fff;border:none;border-radius:.35rem;cursor:pointer">
+              Publish
+            </button>
+          </form>
+          <a href="{{ url_for('webapp.post_detail', post_id=post.id) }}"
+             style="font-size:.82rem;padding:.28rem .7rem;border:1px solid var(--pico-muted-border-color);border-radius:.35rem;text-decoration:none;color:inherit">
+            Review
+          </a>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="card" style="text-align:center;padding:3rem">
+    <p style="font-size:1rem;margin-bottom:.5rem">No drafts waiting for review.</p>
+    <p style="color:var(--pico-muted-color);font-size:.88rem">
+      Drafts are generated automatically when your public memories reach a confidence threshold.
+      Mark atoms as public in your <a href="{{ url_for('webapp.brain') }}">brain</a> to start contributing.
+    </p>
+  </div>
+{% endif %}
+{% endblock %}

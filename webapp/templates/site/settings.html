@@ -1,0 +1,145 @@
+{% extends "site/base.html" %}
+{% block title %}Settings — memoryLayer{% endblock %}
+
+{% block head %}
+<style>
+  .token-box {
+    display: flex; gap: .5rem; align-items: center;
+    background: var(--pico-muted-background);
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: .4rem;
+    padding: .6rem .85rem;
+    font-family: monospace;
+    font-size: .85rem;
+    margin-bottom: .5rem;
+  }
+  .token-value { flex: 1; word-break: break-all; }
+  .copy-btn {
+    flex-shrink: 0;
+    padding: .25rem .6rem;
+    border-radius: .3rem;
+    border: 1px solid var(--pico-muted-border-color);
+    background: #fff;
+    cursor: pointer;
+    font-size: .78rem;
+  }
+  .config-block { margin-bottom: 2rem; }
+  .config-block h3 { font-size: .95rem; font-weight: 700; margin-bottom: .5rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 style="font-size:1.5rem;margin-bottom:2rem">Settings</h1>
+
+<!-- API Token -->
+<section class="card">
+  <h2 style="font-size:1.1rem;margin-bottom:1rem">API Token</h2>
+  <p style="font-size:.88rem;color:var(--pico-muted-color);margin-bottom:.75rem">
+    Use this token to authenticate MCP clients and IDE extensions.
+    Keep it secret — it grants full read/write access to your brain.
+  </p>
+  <div class="token-box">
+    <span class="token-value" id="token-display">{{ current_user.api_token }}</span>
+    <button class="copy-btn" onclick="copyToken()">Copy</button>
+  </div>
+  <form method="post" action="{{ url_for('webapp.rotate_token') }}"
+        onsubmit="return confirm('Rotate token? All existing MCP configs will need updating.')">
+    <button type="submit" style="background:none;border:none;padding:0;color:var(--pico-muted-color);font-size:.82rem;cursor:pointer;text-decoration:underline">
+      Rotate token
+    </button>
+  </form>
+</section>
+
+<!-- MCP Connection Instructions -->
+<section class="card" style="margin-top:1.5rem">
+  <h2 style="font-size:1.1rem;margin-bottom:1rem">Connect your IDE</h2>
+  <p style="font-size:.88rem;color:var(--pico-muted-color);margin-bottom:1.5rem">
+    Add memoryLayer to your IDE by pasting the config below. Replace
+    <code>YOUR_TOKEN</code> with your API token above.
+  </p>
+
+  <div class="config-block">
+    <h3>VS Code <code>.vscode/mcp.json</code></h3>
+    <pre><code>{
+  "servers": {
+    "memoryLayer": {
+      "type": "sse",
+      "url": "{{ request.host_url }}mcp/sse",
+      "headers": {
+        "Authorization": "Bearer {{ current_user.api_token }}"
+      }
+    }
+  }
+}</code></pre>
+  </div>
+
+  <div class="config-block">
+    <h3>Cursor <code>~/.cursor/mcp.json</code></h3>
+    <pre><code>{
+  "mcpServers": {
+    "memoryLayer": {
+      "url": "{{ request.host_url }}mcp/sse",
+      "headers": {
+        "Authorization": "Bearer {{ current_user.api_token }}"
+      }
+    }
+  }
+}</code></pre>
+  </div>
+
+  <div class="config-block">
+    <h3>Claude Desktop <code>claude_desktop_config.json</code></h3>
+    <pre><code>{
+  "mcpServers": {
+    "memoryLayer": {
+      "command": "npx",
+      "args": ["-y", "memory-layer"],
+      "env": {
+        "MEMORY_LAYER_TOKEN": "{{ current_user.api_token }}",
+        "MEMORY_LAYER_URL": "{{ request.host_url }}mcp/sse"
+      }
+    }
+  }
+}</code></pre>
+  </div>
+
+  <div class="config-block">
+    <h3>Local self-hosted (stdio)</h3>
+    <p style="font-size:.85rem;color:var(--pico-muted-color)">
+      Running memory-layer locally? Use the stdio transport with your local
+      <code>.env</code> file — no token needed.
+    </p>
+    <pre><code>{
+  "servers": {
+    "memoryLayer": {
+      "type": "stdio",
+      "command": "/path/to/.venv/bin/python",
+      "args": ["-m", "mcp_server.server"],
+      "envFile": "/path/to/memory-layer/.env"
+    }
+  }
+}</code></pre>
+  </div>
+</section>
+
+<!-- Account info -->
+<section class="card" style="margin-top:1.5rem">
+  <h2 style="font-size:1.1rem;margin-bottom:1rem">Account</h2>
+  <table style="font-size:.88rem;width:auto">
+    <tr><th style="text-align:left;padding-right:2rem;font-weight:600">Username</th><td>{{ current_user.username }}</td></tr>
+    <tr><th style="text-align:left;padding-right:2rem;font-weight:600">Email</th><td>{{ current_user.email or "—" }}</td></tr>
+    <tr><th style="text-align:left;padding-right:2rem;font-weight:600">Role</th><td>{% if current_user.is_admin %}Admin{% else %}User{% endif %}</td></tr>
+  </table>
+</section>
+
+<script>
+function copyToken() {
+  const val = document.getElementById("token-display").textContent.trim();
+  navigator.clipboard.writeText(val).then(() => {
+    const btn = event.target;
+    btn.textContent = "Copied!";
+    setTimeout(() => btn.textContent = "Copy", 1500);
+  });
+}
+</script>
+{% endblock %}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.memory_store import MemoryStore
+from app.db import get_store
 
 
 def recompute_memory_atom(atom_id: str) -> dict[str, Any]:
@@ -22,7 +22,7 @@ def recompute_memory_atom(atom_id: str) -> dict[str, Any]:
         Updated atom dict including all aggregation fields on success.
         {"error": "not found", "atom_id": "<uuid>"} if the atom does not exist.
     """
-    store = MemoryStore()
+    store = get_store()
     result = store.recompute_atom_weights(atom_id)
     if result is None:
         return {"error": "not found", "atom_id": atom_id}

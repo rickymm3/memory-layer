@@ -1,0 +1,43 @@
+{% extends "site/base.html" %}
+{% block title %}Connections — memoryLayer{% endblock %}
+{% block main_class %}wide{% endblock %}
+
+{% block content %}
+<h1 style="font-size:1.5rem;margin-bottom:.5rem">Topic Connections</h1>
+<p style="color:var(--pico-muted-color);margin-bottom:1.5rem;font-size:.9rem">
+  Topics from your public brain that others are also discussing.
+  Sources are anonymized — engage to see attribution.
+</p>
+
+{% if matches %}
+  <div style="display:grid;gap:1.25rem">
+    {% for m in matches %}
+    <div class="card">
+      <div style="font-size:.9rem;font-weight:600;margin-bottom:.75rem">
+        {{ m.atom_content | truncate(120) }}
+        <span class="badge" style="margin-left:.4rem">{{ m.memory_type }}</span>
+      </div>
+      <div style="font-size:.82rem;color:var(--pico-muted-color);margin-bottom:.6rem">
+        {{ m.matches | length }} related public discussion{{ 's' if m.matches | length != 1 else '' }} in the community
+      </div>
+      {% for match in m.matches %}
+        <div style="padding:.5rem .75rem;border-left:3px solid var(--pico-muted-border-color);margin-bottom:.4rem;font-size:.85rem">
+          {{ match.content | truncate(140) }}
+          <span style="margin-left:.4rem;font-size:.75em;color:var(--pico-muted-color)">
+            {{ "%.0f%%" | format(match.similarity * 100) }} match · {{ "%.0f%%" | format(match.confidence * 100) }} conf
+          </span>
+        </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="card" style="text-align:center;padding:3rem">
+    <p style="font-size:1rem;margin-bottom:.5rem">No connections found yet.</p>
+    <p style="color:var(--pico-muted-color);font-size:.88rem">
+      Mark some of your brain's atoms as public to start seeing how your knowledge
+      intersects with the community.
+    </p>
+  </div>
+{% endif %}
+{% endblock %}

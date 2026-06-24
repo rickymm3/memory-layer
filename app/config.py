@@ -2,15 +2,14 @@ import os
 import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 
-DEFAULT_DATABASE_URL = (
-    "postgresql://memory:memory_dev_password@localhost:5432/memory_layer_development"
-)
-DEFAULT_CHAT_MODEL = "qwen3:8b"
+DEFAULT_CHAT_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_EMBEDDING_MODEL = "qwen3-embedding:latest"
+DEFAULT_SQLITE_PATH = Path.home() / ".memory-layer" / "memory.db"
 
 
 def _detect_windows_host_ip() -> str | None:
@@ -48,6 +47,8 @@ DEFAULT_MEMORY_RETRIEVAL_THRESHOLD = 0.60
 @dataclass(frozen=True)
 class AppConfig:
     database_url: str
+    backend: str          # "postgres" | "sqlite"
+    sqlite_db_path: str
     ollama_host: str | None
     chat_model: str
     embedding_model: str
@@ -70,8 +71,19 @@ class AppConfig:
 def get_config() -> AppConfig:
     load_dotenv()
 
+    _db_url = os.getenv("DATABASE_URL", "").strip()
+    if _db_url.startswith("postgresql"):
+        _backend = "postgres"
+        _sqlite_path = ""
+    else:
+        _backend = "sqlite"
+        _db_url = ""
+        _sqlite_path = os.getenv("SQLITE_DB_PATH", str(DEFAULT_SQLITE_PATH)).strip()
+
     return AppConfig(
-        database_url=os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL).strip(),
+        database_url=_db_url,
+        backend=_backend,
+        sqlite_db_path=_sqlite_path,
         ollama_host=_resolve_ollama_host(),
         chat_model=os.getenv("CHAT_MODEL", DEFAULT_CHAT_MODEL).strip(),
         embedding_model=os.getenv("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL).strip(),

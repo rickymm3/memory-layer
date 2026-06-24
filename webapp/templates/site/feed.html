@@ -1,0 +1,61 @@
+{% extends "site/base.html" %}
+{% block title %}Feed — memoryLayer{% endblock %}
+{% block main_class %}wide{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:baseline;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap">
+  <h1 style="font-size:1.5rem;margin:0">Community Feed</h1>
+  <form method="get" style="display:flex;gap:.5rem;margin-left:auto;flex-wrap:wrap">
+    <select name="format" style="font-size:.85rem;padding:.3rem .6rem">
+      <option value="" {% if not format_filter %}selected{% endif %}>All formats</option>
+      {% for fmt in ['tutorial','article','discussion','open_question','news_brief','narrative'] %}
+        <option value="{{ fmt }}" {% if format_filter == fmt %}selected{% endif %}>{{ fmt.replace('_',' ').title() }}</option>
+      {% endfor %}
+    </select>
+    <input type="text" name="tag" value="{{ tag_filter }}"
+           placeholder="Filter by tag" style="font-size:.85rem;padding:.3rem .6rem;width:140px">
+    <button type="submit" style="font-size:.85rem;padding:.3rem .75rem">Filter</button>
+    {% if format_filter or tag_filter %}
+      <a href="{{ url_for('webapp.feed') }}" style="font-size:.85rem;line-height:2">Clear</a>
+    {% endif %}
+  </form>
+</div>
+
+{% if posts %}
+  <div style="display:grid;gap:1rem">
+    {% for post in posts %}
+    <div class="card" style="padding:1.25rem 1.5rem">
+      <div style="display:flex;align-items:flex-start;gap:.75rem">
+        <div style="flex:1">
+          <a href="{{ url_for('webapp.post_detail', post_id=post.id) }}"
+             style="font-weight:700;font-size:1rem;text-decoration:none;color:inherit">
+            {{ post.title }}
+          </a>
+          <div style="margin-top:.4rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+            <span class="badge">{{ post.format.replace('_',' ') }}</span>
+            {% for tag in post.topic_tags[:3] %}
+              <a href="{{ url_for('webapp.feed', tag=tag) }}"
+                 style="font-size:.75em;color:var(--pico-muted-color);text-decoration:none">#{{ tag }}</a>
+            {% endfor %}
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;font-size:.8rem;color:var(--pico-muted-color)">
+          <div>by {{ post.author }}</div>
+          <div>{{ post.published_at }}</div>
+          <div style="margin-top:.2rem;font-weight:600;color:{% if post.confidence >= 0.7 %}#166534{% elif post.confidence >= 0.4 %}#854d0e{% else %}#991b1b{% endif %}">
+            {{ "%.0f%%" | format(post.confidence * 100) }} conf.
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="card" style="text-align:center;padding:3rem">
+    <p style="font-size:1.1rem;margin-bottom:.5rem">No posts yet.</p>
+    <p style="color:var(--pico-muted-color)">
+      Posts are generated automatically when community knowledge reaches a confidence threshold.
+    </p>
+  </div>
+{% endif %}
+{% endblock %}

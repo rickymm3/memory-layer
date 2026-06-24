@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Synapse{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:        #0f1117;
+      --bg2:       #181c27;
+      --bg3:       #1e2233;
+      --border:    #2a2f45;
+      --border2:   #353b55;
+      --text:      #e2e6f0;
+      --muted:     #7b82a0;
+      --accent:    #6c8cf5;
+      --accent2:   #4f6fe8;
+      --green:     #34d399;
+      --amber:     #fbbf24;
+      --red:       #f87171;
+      --novel:     #a78bfa;
+      --radius:    6px;
+      --font:      'Inter', system-ui, sans-serif;
+      --mono:      'JetBrains Mono', monospace;
+    }
+    html { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 15px; line-height: 1.6; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { color: #8aa6ff; }
+    input, textarea, select, button { font-family: var(--font); }
+
+    /* ── NAV ── */
+    .nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(15,17,23,.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 0;
+      padding: 0 1.5rem; height: 52px;
+    }
+    .nav-brand {
+      font-weight: 700; font-size: 1.05rem; color: var(--text);
+      letter-spacing: -.02em; margin-right: 2rem; flex-shrink: 0;
+    }
+    .nav-brand span { color: var(--accent); }
+    .nav-links { display: flex; gap: .25rem; flex: 1; }
+    .nav-links a {
+      color: var(--muted); font-size: .875rem; font-weight: 500;
+      padding: .35rem .7rem; border-radius: var(--radius);
+      transition: color .15s, background .15s;
+    }
+    .nav-links a:hover { color: var(--text); background: var(--bg3); }
+    .nav-links a.active { color: var(--text); background: var(--bg3); }
+    .nav-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      background: var(--accent); color: #fff; font-size: .65rem; font-weight: 700;
+      border-radius: 10px; padding: .05rem .35rem; min-width: 18px;
+      margin-left: .3rem; vertical-align: middle;
+    }
+    .nav-right { display: flex; align-items: center; gap: .5rem; margin-left: auto; }
+    .nav-username { font-size: .82rem; color: var(--muted); }
+    .btn { display: inline-flex; align-items: center; gap: .35rem; padding: .38rem .85rem; border-radius: var(--radius); font-size: .84rem; font-weight: 600; cursor: pointer; border: none; transition: opacity .15s, background .15s; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent2); color: #fff; opacity: 1; }
+    .btn-ghost { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+    .btn-ghost:hover { border-color: var(--border2); }
+    .btn-sm { padding: .25rem .6rem; font-size: .78rem; }
+
+    /* ── LAYOUT ── */
+    .page { max-width: 1200px; margin: 0 auto; padding: 1.5rem 1.5rem 4rem; }
+    .page-wide { max-width: 1400px; }
+    .cols { display: grid; grid-template-columns: 1fr 320px; gap: 1.5rem; align-items: start; }
+    @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } .sidebar { display: none; } }
+
+    /* ── ALERTS ── */
+    .alert { padding: .65rem 1rem; border-radius: var(--radius); margin-bottom: 1rem; font-size: .875rem; border: 1px solid; }
+    .alert-error   { background: rgba(248,113,113,.08); color: #fca5a5; border-color: rgba(248,113,113,.25); }
+    .alert-success { background: rgba(52,211,153,.08); color: #6ee7b7; border-color: rgba(52,211,153,.25); }
+
+    /* ── DISCUSSION CARD ── */
+    .disc-card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1rem 1.25rem;
+      transition: border-color .15s;
+      display: block; color: var(--text); text-decoration: none;
+    }
+    .disc-card:hover { border-color: var(--border2); color: var(--text); }
+    .disc-card + .disc-card { margin-top: .5rem; }
+    .disc-card-title { font-weight: 600; font-size: .97rem; line-height: 1.4; margin-bottom: .4rem; }
+    .disc-meta { font-size: .78rem; color: var(--muted); display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; }
+    .disc-meta-sep::before { content: '·'; }
+    .tag { font-size: .72rem; color: var(--muted); }
+    .tag::before { content: '#'; }
+
+    /* ── BADGES ── */
+    .badge { display: inline-flex; align-items: center; padding: .1em .45em; border-radius: 4px; font-size: .72em; font-weight: 600; letter-spacing: .02em; }
+    .badge-novel  { background: rgba(167,139,250,.15); color: var(--novel); border: 1px solid rgba(167,139,250,.3); }
+    .badge-fact   { background: rgba(52,211,153,.12); color: var(--green); border: 1px solid rgba(52,211,153,.25); }
+    .badge-decision { background: rgba(108,140,245,.12); color: var(--accent); border: 1px solid rgba(108,140,245,.25); }
+    .badge-observation { background: rgba(251,191,36,.1); color: var(--amber); border: 1px solid rgba(251,191,36,.2); }
+    .badge-opinion { background: rgba(248,113,113,.1); color: var(--red); border: 1px solid rgba(248,113,113,.2); }
+    .badge-default { background: var(--bg3); color: var(--muted); border: 1px solid var(--border); }
+
+    /* ── SIDEBAR WIDGET ── */
+    .widget { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; }
+    .widget-title { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: .75rem; }
+    .widget-item { padding: .5rem 0; border-bottom: 1px solid var(--border); }
+    .widget-item:last-child { border-bottom: none; padding-bottom: 0; }
+    .widget-item-title { font-size: .85rem; font-weight: 500; line-height: 1.35; }
+    .widget-item-meta { font-size: .74rem; color: var(--muted); margin-top: .2rem; }
+
+    /* ── THREAD VIEW ── */
+    .thread-entry { display: flex; gap: 1rem; padding: .85rem 0; border-bottom: 1px solid var(--border); }
+    .thread-entry:last-child { border-bottom: none; }
+    .thread-bar { width: 3px; border-radius: 2px; flex-shrink: 0; align-self: stretch; min-height: 24px; }
+    .thread-bar-mine { background: var(--accent); }
+    .thread-bar-other { background: var(--border2); }
+    .thread-bar-novel { background: var(--novel); }
+    .thread-content { font-size: .9rem; line-height: 1.6; flex: 1; min-width: 0; }
+    .thread-meta { font-size: .75rem; color: var(--muted); margin-top: .35rem; display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
+
+    /* ── CONF METER ── */
+    .conf-high { color: var(--green); }
+    .conf-mid  { color: var(--amber); }
+    .conf-low  { color: var(--red);   }
+
+    /* ── FORMS ── */
+    .field { margin-bottom: 1.1rem; }
+    .field label { display: block; font-size: .82rem; font-weight: 600; color: var(--muted); margin-bottom: .35rem; letter-spacing: .03em; text-transform: uppercase; }
+    .field input, .field textarea, .field select {
+      width: 100%; background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: .55rem .75rem; color: var(--text);
+      font-size: .9rem; transition: border-color .15s;
+    }
+    .field input:focus, .field textarea:focus, .field select:focus { outline: none; border-color: var(--accent); }
+    .field textarea { resize: vertical; line-height: 1.6; }
+
+    /* ── PAGE HEADER ── */
+    .page-header { margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
+    .page-header h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -.02em; }
+    .page-header p { color: var(--muted); font-size: .88rem; margin-top: .3rem; }
+
+    /* ── EMPTY STATE ── */
+    .empty { text-align: center; padding: 3.5rem 1rem; color: var(--muted); }
+    .empty h3 { font-size: 1rem; color: var(--text); margin-bottom: .5rem; }
+    .empty p { font-size: .88rem; }
+
+    /* ── VISIBILITY TOGGLE ── */
+    .vis-btn { font-size: .72rem; padding: .18rem .5rem; border-radius: 4px; cursor: pointer; border: 1px solid; font-weight: 600; }
+    .vis-public  { background: rgba(52,211,153,.1); color: var(--green); border-color: rgba(52,211,153,.3); }
+    .vis-private { background: var(--bg3); color: var(--muted); border-color: var(--border); }
+
+    /* ── TABLE ── */
+    table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+    th { text-align: left; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); padding: .5rem .75rem; border-bottom: 1px solid var(--border); }
+    td { padding: .6rem .75rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--bg3); }
+
+    code { font-family: var(--mono); font-size: .82em; background: var(--bg3); padding: .1em .35em; border-radius: 3px; color: #a5b4fc; }
+    pre  { background: var(--bg3); padding: 1rem; border-radius: var(--radius); overflow-x: auto; font-size: .82em; line-height: 1.6; border: 1px solid var(--border); }
+    pre code { background: none; padding: 0; color: var(--text); }
+
+    footer { border-top: 1px solid var(--border); padding: 1.5rem; text-align: center; font-size: .78rem; color: var(--muted); margin-top: 3rem; }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body>
+
+<nav class="nav">
+  <a href="{{ url_for('webapp.landing') }}" class="nav-brand">Syn<span>apse</span></a>
+  <div class="nav-links">
+    {% if current_user.is_authenticated %}
+      <a href="{{ url_for('webapp.landing') }}">Home</a>
+      <a href="{{ url_for('webapp.discussions') }}">
+        Discussions
+        {% if unread_count > 0 %}<span class="nav-badge">{{ unread_count }}</span>{% endif %}
+      </a>
+      <a href="{{ url_for('webapp.brain') }}">My Brain</a>
+      <a href="{{ url_for('webapp.capture') }}">+ Capture</a>
+      {% if current_user.is_admin %}
+      <a href="{{ url_for('webapp.chat') }}" style="color:var(--accent)">Chat</a>
+      {% endif %}
+    {% else %}
+      <a href="{{ url_for('webapp.landing') }}">Home</a>
+    {% endif %}
+  </div>
+  <div class="nav-right">
+    {% if current_user.is_authenticated %}
+      <span class="nav-username">{{ current_user.username }}</span>
+      {% if current_user.is_authenticated and current_user.is_admin %}
+      <a href="{{ url_for('webapp.admin') }}" class="btn btn-ghost btn-sm" style="color:var(--amber)">Admin</a>
+    {% endif %}
+    <a href="{{ url_for('webapp.settings') }}" class="btn btn-ghost btn-sm">Settings</a>
+      <form method="post" action="{{ url_for('webapp.logout') }}" style="margin:0">
+        <button type="submit" class="btn btn-ghost btn-sm">Log out</button>
+      </form>
+    {% else %}
+      <a href="{{ url_for('webapp.login') }}" class="btn btn-ghost btn-sm">Log in</a>
+      <a href="{{ url_for('webapp.signup') }}" class="btn btn-primary btn-sm">Sign up free</a>
+    {% endif %}
+  </div>
+</nav>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div style="max-width:900px;margin:.75rem auto;padding:0 1.5rem">
+      <div class="alert alert-{{ category }}">{{ message }}</div>
+    </div>
+  {% endfor %}
+{% endwith %}
+
+<div class="page {% block page_class %}{% endblock %}">
+  {% block content %}{% endblock %}
+</div>
+
+<footer>
+  Synapse &mdash; AI beliefs, collectively validated &mdash;
+  <a href="https://github.com/rickymm3/memory-layer" target="_blank" rel="noopener">Open source</a>
+</footer>
+
+</body>
+</html>

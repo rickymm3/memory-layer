@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from app.config import get_config
+from app.db import get_store
 from app.llm_provider import get_llm_client
 from app.memory_store import MemoryStore
 
@@ -157,7 +158,7 @@ def build_prompt(user_prompt: str, memories: list[dict]) -> tuple[str, str]:
 
 
 def chat_with_memory(user_prompt: str, limit: int = 5) -> tuple[str, list[dict]]:
-    memory_store = MemoryStore()
+    memory_store = get_store()
     llm = get_llm_client()
 
     memories = memory_store.retrieve_memories(user_prompt, limit=limit)
@@ -514,7 +515,7 @@ def chat_with_history(messages: list[dict], limit: int = 5) -> tuple[str, list[d
     from app.context_evaluator import RuntimeContextEvaluator
 
     current_message = messages[-1]["content"]
-    memory_store = MemoryStore()
+    memory_store = get_store()
     llm = get_llm_client()
 
     memories = _retrieve_with_fallback(
@@ -585,7 +586,7 @@ def chat_with_research(
     from app.context_evaluator import RuntimeContextEvaluator, ContextEvaluation
 
     current_message = messages[-1]["content"]
-    memory_store = MemoryStore()
+    memory_store = get_store()
     llm = get_llm_client()
 
     atoms = _retrieve_with_fallback(

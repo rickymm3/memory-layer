@@ -1,0 +1,100 @@
+{% extends "site/base.html" %}
+{% block title %}{{ disc.title }} — Synapse{% endblock %}
+
+{% block content %}
+<div class="cols">
+  <div>
+    <div style="margin-bottom:1.25rem">
+      <a href="{{ url_for('webapp.landing') }}" style="font-size:.82rem;color:var(--muted)">← Discussions</a>
+    </div>
+
+    <div style="margin-bottom:1.5rem">
+      {% if disc.novelty_flag %}
+        <span class="badge badge-novel" style="margin-bottom:.6rem;display:inline-flex">★ Novel Discussion</span><br>
+      {% endif %}
+      <h1 style="font-size:1.35rem;font-weight:700;letter-spacing:-.02em;line-height:1.3;margin-bottom:.5rem">{{ disc.title }}</h1>
+      <div style="font-size:.8rem;color:var(--muted);display:flex;gap:.75rem;flex-wrap:wrap">
+        <span>{{ disc.contributor_count }} contributor{{ 's' if disc.contributor_count != 1 }}</span>
+        <span>·</span>
+        <span>Last activity {{ disc.last_activity }}</span>
+        {% for tag in disc.topic_tags[:5] %}
+          <span class="tag">{{ tag }}</span>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:1rem">
+      {% if contributions %}
+        {% for c in contributions %}
+        <div class="thread-entry">
+          <div class="thread-bar {% if c.novelty_score >= 0.75 %}thread-bar-novel{% elif c.is_mine %}thread-bar-mine{% else %}thread-bar-other{% endif %}"></div>
+          <div style="flex:1;min-width:0">
+            <div class="thread-content">{{ c.content }}</div>
+            <div class="thread-meta">
+              <span style="font-weight:{% if c.is_mine %}600{% else %}400{% endif %};color:{% if c.is_mine %}var(--accent){% else %}var(--muted){% endif %}">
+                {{ c.attribution }}
+              </span>
+              <span class="badge badge-{{ c.memory_type }}">{{ c.memory_type }}</span>
+              {% if c.novelty_score >= 0.75 %}
+                <span style="color:var(--novel);font-weight:600;font-size:.72rem">★ novel</span>
+              {% endif %}
+              <span class="{% if c.confidence >= 0.7 %}conf-high{% elif c.confidence >= 0.4 %}conf-mid{% else %}conf-low{% endif %}">
+                {{ "%.0f%%" | format(c.confidence * 100) }} conf
+              </span>
+              <span>{{ c.added_at }}</span>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+
+        <div style="margin-top:1.5rem;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:1rem">
+          <p style="font-size:.83rem;color:var(--muted)">
+            To add your perspective, talk to your AI about this topic and make the atom public in your
+            <a href="{{ url_for('webapp.brain') }}">brain</a>.
+            It will appear here after the next clustering run.
+          </p>
+        </div>
+      {% else %}
+        <div class="empty">
+          <h3>No contributions yet</h3>
+          <p style="margin-top:.4rem">Be the first to contribute to this discussion.</p>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="sidebar">
+    {% if related %}
+    <div class="widget">
+      <div class="widget-title">Related Discussions</div>
+      {% for r in related %}
+      <div class="widget-item">
+        <a href="{{ url_for('webapp.discussion_detail', disc_id=r.id) }}" style="font-size:.85rem;font-weight:500;color:var(--text);display:block;line-height:1.35">
+          {{ r.title | truncate(65) }}
+        </a>
+        <div class="widget-item-meta">{{ r.contributor_count }} contributors · {{ r.last_activity }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if current_user.is_authenticated %}
+    <div class="widget">
+      <div class="widget-title">You might also like</div>
+      <p style="font-size:.82rem;color:var(--muted);margin-bottom:.75rem">
+        Check your <a href="{{ url_for('webapp.discussions') }}">discussions feed</a> for threads where your ideas already connect with others.
+      </p>
+    </div>
+    {% endif %}
+
+    <div class="widget">
+      <div class="widget-title">About this discussion</div>
+      <div style="font-size:.82rem;color:var(--muted);display:grid;gap:.35rem">
+        <div>{{ disc.contributor_count }} contributor{{ 's' if disc.contributor_count != 1 }}</div>
+        <div>Generated automatically from public ideas</div>
+        <div>Updated {{ disc.last_activity }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

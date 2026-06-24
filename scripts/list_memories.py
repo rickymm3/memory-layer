@@ -34,12 +34,14 @@ def main() -> int:
         return 0
 
     for memory in memories:
+        usc = memory.get("unique_source_count", 0)
+        sources_tag = f"  [{usc} source{'s' if usc != 1 else ''}]" if usc else ""
         print(f"id: {memory['id']}")
-        print(f"memory_type: {memory['memory_type']}")
-        print(f"scope: {memory['scope']}")
+        print(f"type: {memory['memory_type']}  scope: {memory['scope']}{sources_tag}")
         print(f"content: {memory['content']}")
-        print(f"context_summary: {memory['context_summary']}")
-        print(f"created_at: {memory['created_at']}")
+        if memory.get("context_summary"):
+            print(f"inject: {memory['context_summary']}")
+        print(f"created: {memory['created_at']}")
         print("-" * 60)
 
     return 0
