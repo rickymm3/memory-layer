@@ -1103,6 +1103,15 @@ def discussion_react(disc_id):
                         (str(disc_id), current_user.username),
                     )
                 conn.commit()
+            # Trigger synthesis in background — non-blocking
+            from concurrent.futures import ThreadPoolExecutor
+            from app.discussion_synthesizer import synthesise_discussion
+            import os as _os
+            _db_url = _os.environ.get("DATABASE_URL", "")
+            _disc_id_str = str(disc_id)
+            ThreadPoolExecutor(max_workers=1).submit(
+                synthesise_discussion, _disc_id_str, _db_url
+            )
             flash("Your perspective has been added.", "success")
         else:
             flash("Your perspective was noted but didn't produce new insight.", "info")
@@ -1111,6 +1120,62 @@ def discussion_react(disc_id):
         _logger.warning("discussion_react: %s", exc)
 
     return redirect(url_for("webapp.discussion_detail", disc_id=disc_id))
+
+
+@site_bp.route("/notifications")
+@login_required
+def notifications():
+    """Show the user what changed on conversations they care about."""
+    items = []
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT n.id, d.id, d.title, d.thread_status,
+                           n.new_atom_count, n.read, n.created_at
+                    FROM user_notifications n
+                    JOIN discussions d ON d.id = n.discussion_id
+                    WHERE n.user_id = (SELECT id FROM users WHERE username = %s)
+                    ORDER BY n.created_at DESC
+                    LIMIT 50;
+                    """,
+                    (current_user.username,),
+                )
+                for r in cur.fetchall():
+                    status = r[3] or "active"
+                    if status == "answered":
+                        message = f"Your conversation has a new answer."
+                    elif status == "updated":
+                        count = r[4]
+                        message = f"New perspective{'s' if count != 1 else ''} arrived on your conversation."
+                    elif status == "reopened":
+                        message = "New information arrived on your conversation."
+                    else:
+                        count = r[4]
+                        message = f"{count} new perspective{'s' if count != 1 else ''} added."
+                    items.append({
+                        "id": str(r[0]),
+                        "disc_id": str(r[1]),
+                        "disc_title": r[2],
+                        "thread_status": status,
+                        "message": message,
+                        "read": r[5],
+                        "created_at": _ago(r[6]),
+                    })
+                # Mark all read
+                cur.execute(
+                    """
+                    UPDATE user_notifications SET read = true
+                    WHERE user_id = (SELECT id FROM users WHERE username = %s)
+                      AND read = false;
+                    """,
+                    (current_user.username,),
+                )
+            conn.commit()
+    except Exception:
+        pass
+    return render_template("site/notifications.html", items=items)
 
 
 def _unread_notification_count(username: str) -> int:

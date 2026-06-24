@@ -1,0 +1,178 @@
+"""AI synthesis of discussion reactions — the core of Milestone 2.
+
+When reactions accumulate on a discussion, this module:
+  1. Fetches all reaction atoms linked to the discussion
+  2. Asks the LLM to generate a single-paragraph synthesis
+     ("Based on N perspectives: many think X, some note Y...")
+  3. Commits the synthesis through the full write pipeline as a refined atom
+  4. Links the synthesis atom back to the discussion
+  5. Advances thread_status → 'answered'
+  6. Updates the discussion's last_activity_at
+
+The originating user receives the synthesis atom via normal cosine-similarity
+retrieval the next time they chat about the same topic. They see a richer
+answer — not a thread, not a list of replies. The pipe is fully invisible.
+"""
+from __future__ import annotations
+
+import logging
+import os
+
+_logger = logging.getLogger(__name__)
+
+_MIN_REACTIONS = 1  # synthesise after every reaction for responsiveness
+_MAX_ATOMS_FOR_SYNTHESIS = 20
+
+
+def synthesise_discussion(disc_id: str, db_url: str | None = None) -> str | None:
+    """Generate an AI synthesis of all reaction atoms on a discussion.
+
+    Returns the committed synthesis atom_id on success, None on failure.
+    Non-fatal — caller should swallow exceptions from this function.
+    """
+    if not db_url:
+        db_url = os.environ.get("DATABASE_URL", "")
+    if not db_url:
+        return None
+
+    try:
+        import psycopg
+        with psycopg.connect(db_url) as conn:
+            with conn.cursor() as cur:
+                # Fetch discussion metadata
+                cur.execute(
+                    "SELECT title, thread_status, created_by_user_id FROM discussions WHERE id = %s;",
+                    (disc_id,),
+                )
+                disc_row = cur.fetchone()
+                if not disc_row:
+                    return None
+                disc_title, current_status, creator_user_id = disc_row
+
+                # Don't re-synthesise if already answered/validated
+                if current_status in ("answered", "validated"):
+                    return None
+
+                # Fetch all reaction atoms — most novel first
+                cur.execute(
+                    """
+                    SELECT ma.content, ma.memory_type, ma.confidence
+                    FROM discussion_atoms da
+                    JOIN memory_atoms ma ON ma.id = da.atom_id
+                    WHERE da.discussion_id = %s
+                    ORDER BY da.novelty_score DESC, da.added_at ASC
+                    LIMIT %s;
+                    """,
+                    (disc_id, _MAX_ATOMS_FOR_SYNTHESIS),
+                )
+                atoms = cur.fetchall()
+
+        if len(atoms) < _MIN_REACTIONS:
+            return None
+
+        # Resolve creator username for scope
+        creator_username = None
+        if creator_user_id:
+            try:
+                import psycopg as _pg
+                with _pg.connect(db_url) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT username FROM users WHERE id = %s;", (creator_user_id,))
+                        row = cur.fetchone()
+                        creator_username = row[0] if row else None
+            except Exception:
+                pass
+
+        synthesis_text = _generate_synthesis(disc_title, atoms)
+        if not synthesis_text:
+            return None
+
+        # Commit synthesis through the full pipeline
+        from app.commit_pipeline import MemoryCommitPipeline
+        pipeline = MemoryCommitPipeline()
+        candidate = {
+            "content": synthesis_text,
+            "memory_type": "fact",
+            "scope": f"user" if not creator_username else f"user:{creator_username}",
+            "importance": 0.75,
+            "should_store": True,
+        }
+        decision = pipeline.commit_candidate(
+            candidate,
+            source_key="discussion_synthesis",
+            source_type="synthesis",
+            source_user_id=creator_username,
+        )
+        atom_id = decision.committed_atom_id
+        if not atom_id:
+            return None
+
+        # Link synthesis atom to discussion and advance status
+        with psycopg.connect(db_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO discussion_atoms
+                        (discussion_id, atom_id, source_user_id, novelty_score)
+                    VALUES (%s, %s, 'synapse_synthesis', 0.8)
+                    ON CONFLICT (discussion_id, atom_id) DO NOTHING;
+                    """,
+                    (disc_id, atom_id),
+                )
+                cur.execute(
+                    """
+                    UPDATE discussions
+                    SET thread_status = 'answered',
+                        last_activity_at = now()
+                    WHERE id = %s;
+                    """,
+                    (disc_id,),
+                )
+            conn.commit()
+
+        _logger.info("discussion_synthesizer: synthesis %s committed for discussion %s", atom_id, disc_id)
+        return atom_id
+
+    except Exception as exc:
+        _logger.warning("discussion_synthesizer: failed for %s: %s", disc_id, exc)
+        return None
+
+
+def _generate_synthesis(title: str, atoms: list[tuple]) -> str | None:
+    """Call the LLM to synthesise atom contents into a single paragraph.
+
+    Falls back to mechanical concatenation if LLM is unavailable.
+    """
+    atom_texts = [row[0] for row in atoms if row[0]]
+    n = len(atom_texts)
+    if not atom_texts:
+        return None
+
+    prompt = (
+        f"Topic: {title}\n\n"
+        f"The following {n} perspective(s) were contributed by different people:\n\n"
+        + "\n\n".join(f"{i+1}. {t}" for i, t in enumerate(atom_texts))
+        + "\n\nWrite a single paragraph synthesis starting with "
+        f'"Based on {n} perspective{"s" if n != 1 else ""}:". '
+        "Capture the main consensus, notable disagreements, and specific insights. "
+        "Under 120 words. No bullet points. Plain prose only."
+    )
+
+    try:
+        from app.llm_provider import get_chat_client
+        llm = get_chat_client()
+        result = llm.generate_response(
+            prompt,
+            system="You synthesise multiple viewpoints into a single clear paragraph. Be concise and neutral.",
+        )
+        return result.strip() if result else _mechanical_synthesis(atom_texts)
+    except Exception:
+        return _mechanical_synthesis(atom_texts)
+
+
+def _mechanical_synthesis(atom_texts: list[str]) -> str:
+    """Fallback when LLM is unavailable — joins top 3 perspectives mechanically."""
+    n = len(atom_texts)
+    parts = [t[:200] for t in atom_texts[:3]]
+    intro = f"Based on {n} perspective{'s' if n != 1 else ''}: "
+    return intro + " Additionally, ".join(parts) + "."

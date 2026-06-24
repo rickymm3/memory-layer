@@ -175,8 +175,9 @@
     {% if current_user.is_authenticated %}
       <a href="{{ url_for('webapp.landing') }}">Home</a>
       <a href="{{ url_for('webapp.explore') }}">Explore</a>
-      <a href="{{ url_for('webapp.discussions') }}">
-        Discussions
+      <a href="{{ url_for('webapp.discussions') }}">Discussions</a>
+      <a href="{{ url_for('webapp.notifications') }}">
+        Notifications
         {% if unread_count > 0 %}<span class="nav-badge">{{ unread_count }}</span>{% endif %}
       </a>
       <a href="{{ url_for('webapp.brain') }}">My Brain</a>
