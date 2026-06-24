@@ -860,11 +860,11 @@ def api_ingest():
 @site_bp.route("/explore")
 @login_required
 def explore():
-    """Public feed of all auto-published discussions from low-confidence turns.
+    """Public feed of auto-published discussions, ranked by user topic affinity.
 
-    This is the browse surface where any user can see what conversations the AI
-    couldn't answer confidently and react to them. Reactions feed back into the
-    belief weighting pipeline for the originating user — invisibly.
+    For users with conversation history the feed is re-ranked so discussions
+    matching their atom corpus appear first. For new users with no history
+    the feed falls back to pure recency — broadcast always works.
     """
     rows = []
     try:
@@ -895,6 +895,19 @@ def explore():
                     })
     except Exception:
         pass
+
+    # Re-rank by topic affinity if the user has history; broadcast fallback if not
+    if current_user.is_authenticated and rows:
+        try:
+            from app.topic_affinity import get_user_topic_tags, rank_discussions_by_affinity
+            import os as _os
+            user_tags = get_user_topic_tags(
+                current_user.username, _os.environ.get("DATABASE_URL", "")
+            )
+            rows = rank_discussions_by_affinity(rows, user_tags)
+        except Exception:
+            pass  # silently fall back to recency order
+
     return render_template("site/explore.html", discussions=rows)
 
 

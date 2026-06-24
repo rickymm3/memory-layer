@@ -126,8 +126,54 @@ def publish_to_feed(
                         pass  # individual atom link failure is non-fatal
 
             conn.commit()
+
+        # Notify users whose topic affinity matches this discussion — targeted routing
+        _notify_matched_users(str(disc_id), tags, str(user_uuid) if user_uuid else None, db_url)
+
         _logger.info("feed_publisher: published discussion %s from low-confidence turn", disc_id)
         return str(disc_id)
     except Exception as exc:
         _logger.warning("feed_publisher: failed to publish discussion: %s", exc)
         return None
+
+
+def _notify_matched_users(
+    disc_id: str,
+    tags: list[str],
+    exclude_user_id: str | None,
+    db_url: str,
+) -> None:
+    """Insert user_notifications for users whose atom corpus overlaps with these tags.
+
+    Non-fatal. Targeted routing is additive — if no matches are found, the
+    discussion is still visible to everyone via the broadcast explore feed.
+    """
+    try:
+        from app.topic_affinity import find_users_with_affinity
+        matched_ids = find_users_with_affinity(tags, exclude_user_id, db_url)
+        if not matched_ids:
+            return
+
+        import psycopg
+        with psycopg.connect(db_url) as conn:
+            with conn.cursor() as cur:
+                for user_id in matched_ids:
+                    try:
+                        cur.execute(
+                            """
+                            INSERT INTO user_notifications
+                                (user_id, discussion_id, new_atom_count)
+                            VALUES (%s::uuid, %s::uuid, 0)
+                            ON CONFLICT DO NOTHING;
+                            """,
+                            (user_id, disc_id),
+                        )
+                    except Exception:
+                        pass
+            conn.commit()
+        _logger.info(
+            "feed_publisher: notified %d matched users for discussion %s",
+            len(matched_ids), disc_id,
+        )
+    except Exception as exc:
+        _logger.debug("feed_publisher: targeted notify failed (non-fatal): %s", exc)
