@@ -1405,7 +1405,8 @@ def notifications():
                 cur.execute(
                     """
                     SELECT n.id, d.id, d.title, d.thread_status,
-                           n.new_atom_count, n.read, n.created_at
+                           n.new_atom_count, n.read, n.created_at,
+                           COALESCE(n.notification_type, 'reaction')
                     FROM user_notifications n
                     JOIN discussions d ON d.id = n.discussion_id
                     WHERE n.user_id = (SELECT id FROM users WHERE username = %s)
@@ -1416,13 +1417,16 @@ def notifications():
                 )
                 for r in cur.fetchall():
                     status = r[3] or "active"
-                    if status == "answered":
-                        message = f"Your conversation has a new answer."
+                    notif_type = r[7]
+                    if notif_type == "published":
+                        message = "Your conversation was shared with people who may know more."
+                    elif notif_type == "reopened" or status == "reopened":
+                        message = "New information arrived on your conversation."
+                    elif status == "answered":
+                        message = "Your conversation has a new answer."
                     elif status == "updated":
                         count = r[4]
                         message = f"New perspective{'s' if count != 1 else ''} arrived on your conversation."
-                    elif status == "reopened":
-                        message = "New information arrived on your conversation."
                     else:
                         count = r[4]
                         message = f"{count} new perspective{'s' if count != 1 else ''} added."

@@ -189,6 +189,20 @@ def publish_to_feed(
                     except Exception:
                         pass  # individual atom link failure is non-fatal
 
+                # Notify the originating user that their conversation was shared
+                if user_uuid:
+                    try:
+                        cur.execute(
+                            """
+                            INSERT INTO user_notifications
+                                (user_id, discussion_id, new_atom_count, notification_type)
+                            VALUES (%s, %s, 0, 'published');
+                            """,
+                            (str(user_uuid), str(disc_id)),
+                        )
+                    except Exception:
+                        pass
+
             conn.commit()
 
         # Notify users whose topic affinity matches this discussion — targeted routing
