@@ -154,3 +154,71 @@ works for users with no profile. Routing is a precision layer on top of broadcas
    current user, with broadcast as fallback
 
 **To resume:** run `/loop` to continue from here.
+
+---
+
+## Milestone 3 — The Loop Targets
+**Reached:** 2026-06-24
+**Commits:** 5b635bc
+
+### What was built
+
+**Topic affinity inference** (`app/topic_affinity.py`)
+`get_user_topic_tags(username, db_url)` scans the user's most recent 200 atom
+signals, extracts word frequency (5+ char words, stop-list filtered), and
+returns the top 20 topic words as a list. Returns `[]` for users with no history
+— the broadcast fallback kicks in automatically.
+
+`rank_discussions_by_affinity(discussions, user_tags)` re-ranks discussion dicts
+by overlap between their `topic_tags` + title words and the user's topic set.
+Zero overlap → discussion stays at bottom. Empty `user_tags` → original order
+unchanged (broadcast).
+
+`find_users_with_affinity(tags, exclude_user_id, db_url)` queries for users
+whose atom corpus contains ILIKE matches for any of the given tag words —
+returns up to 30 user UUIDs for targeted notification.
+
+**Personalised explore feed** (`webapp/routes.py`)
+`/explore` fetches all auto-published discussions in recency order (broadcast),
+then re-ranks by the current user's affinity. Any error falls back silently.
+New users with zero atom history see the unranked feed — cold start works.
+
+**Targeted notifications on publish** (`app/feed_publisher.py`)
+`publish_to_feed` now calls `_notify_matched_users` after commit. Matched users
+receive a `user_notifications` row. Non-fatal — broadcast always works regardless.
+
+### Milestone check questions — answered
+
+**"Does the system still work for a brand new user with zero history?"**
+Yes. `get_user_topic_tags` returns `[]` for zero-history users.
+`rank_discussions_by_affinity` returns original recency order unchanged.
+Cold start fully honoured.
+
+**"Does a user with relevant history receive more precise routing than a new user?"**
+Yes. Smoke test confirmed: tech-tagged discussions rank above unrelated ones
+for users with tech atom history. Ranking is proportional to tag overlap.
+
+**"Is profile-based targeting additive (not a requirement to function)?"**
+Yes. Affinity is a sort key, not a filter. Every discussion remains visible
+to everyone. Targeted notifications are additive on top of broadcast.
+
+---
+
+## Next: Milestone 4 — The Loop Scales
+
+**Observable:** A user can connect their Claude Desktop, VS Code, or local model
+to the hosted Synapse site via MCP or REST and contribute atoms under their identity.
+Atoms from multiple users appear in the shared store.
+
+**What needs to be built:**
+1. MCP SSE transport — `mcp_server/server.py` reads `MCP_TRANSPORT`, runs SSE when set
+2. Token auth middleware — reads `Authorization: Bearer {token}`, resolves `source_user_id`
+3. All write tools pass `source_user_id` to `store_memory_auto`
+4. All read tools filter private atoms by `source_user_id`
+
+**Checks before declaring done:**
+- Ask yourself: can a user without local Python connect to Synapse?
+- Ask yourself: do atoms from different users appear in each other's relevant feeds?
+- Ask yourself: does the embedding space remain consistent across all connected surfaces?
+
+**To resume:** run `/loop` to continue from here.
