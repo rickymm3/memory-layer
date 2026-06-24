@@ -1195,10 +1195,13 @@ def discussion_detail(disc_id):
                     FROM discussion_atoms da
                     JOIN memory_atoms ma ON ma.id = da.atom_id
                     WHERE da.discussion_id = %s
+                      AND (ma.visibility = 'public'
+                           OR da.source_user_id = %s
+                           OR da.source_user_id = 'synapse_synthesis')
                     ORDER BY da.novelty_score DESC, da.added_at ASC
                     LIMIT 100;
                     """,
-                    (str(disc_id),),
+                    (str(disc_id), current_user.username),
                 )
                 for r in cur.fetchall():
                     is_mine = r[4] == current_user.username
