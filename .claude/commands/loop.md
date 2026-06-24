@@ -1,61 +1,87 @@
 ---
 description: >
-  Synapse autonomous build loop. Goal: complete the project by closing every
-  open node in BACKLOG.md. Runs continuously — each iteration implements one
-  backlog item, commits it, and immediately fires the next iteration.
-  Does not wait for user direction. Does not stop until the backlog is empty.
+  Synapse autonomous build loop. Driven entirely by the spec in project-loop.md.
+  Audits the codebase against the loop diagram each iteration, finds the next
+  gap, closes it, and repeats. Stops at milestones for human review.
+  Does not use a task list. Does not wait for user direction.
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, mcp__memoryLayer__memory_store_auto, mcp__memoryLayer__memory_search
 ---
 
-Your goal is to complete the Synapse project.
-
-Read BACKLOG.md. Take the top unblocked item. Build it. Test it. Commit it.
-Mark it done. Fire the next iteration immediately. Repeat until empty.
+Your goal is to complete the Synapse project by closing every gap between
+the current codebase and the spec. The spec is the authority. Not a task list.
 
 ---
 
-## Step 1 — Load the Synapse loop framework
+## Step 1 — Load the spec
 
 Read this file completely before touching any code:
-/home/ricky/memory-layer/.claude/commands/synapse-loop.md
+/home/ricky/memory-layer/.claude/project-loop.md
 
-This is your architecture spec. Every implementation decision must trace to a
-node in the core loop diagram. If it doesn't, skip it and take the next item.
+This contains:
+- The core loop diagram (what the system must do)
+- The design philosophy (five questions — check every feature against all five)
+- The anti-patterns (what must never be built)
+- The milestones (where to stop for human review)
 
----
-
-## Step 2 — Read the backlog
-
-Read: /home/ricky/memory-layer/BACKLOG.md
-
-Take the first item under **Active** that is not marked blocked.
-If all items are blocked, write why in BACKLOG.md and stop the loop.
-If the backlog is empty, the project is complete — stop the loop.
+If you do not understand a section, read it again. Do not proceed until you
+can answer: what does Synapse do that a forum + LLM layer cannot approximate?
 
 ---
 
-## Step 3 — Audit before coding
+## Step 2 — Audit the codebase against the spec
 
-Before writing a single line:
-1. Check if the item is already partially implemented. Read the relevant files.
-   Do not duplicate work that exists. Continue from where it stopped.
-2. Confirm it connects to a named node in the synapse-loop diagram.
-3. Confirm write integrity on all three surfaces is preserved.
-4. Size the work. If it's more than ~200 lines across files, scope down to the
-   smallest slice that is still a working, testable unit. Do the slice. Leave
-   the rest in BACKLOG with a "partial — continued from commit X" note.
+Do NOT read a task list. Derive the next gap yourself.
+
+Read the core loop diagram in the spec. Then check the codebase:
+
+```bash
+git log --oneline -10          # what was recently built
+git status                     # what is uncommitted
+```
+
+For each node in the loop diagram, ask:
+> "Does working code exist for this node right now?
+> Can I trace data flowing through it end-to-end?
+> If I removed this code, would the loop break?"
+
+The first node where the answer is no — or where the code exists but does not
+honour the design philosophy — is the gap you work on this iteration.
+
+---
+
+## Step 3 — Check the five design questions before building
+
+From the DESIGN PHILOSOPHY section of the spec:
+
+1. Ask yourself: does this feature stall the user or make them feel like they
+   are waiting for humans? If yes — redesign before building.
+
+2. Ask yourself: does this feature expose the routing mechanism to the user?
+   If yes — the pipe must be invisible. Redesign before building.
+
+3. Ask yourself: does this feature surface raw human responses to the user?
+   If yes — the AI must mediate. Redesign before building.
+
+4. Ask yourself: does this feature break if no profiles exist?
+   If yes — add a broadcast fallback before building the targeted version.
+
+5. Ask yourself: does this feature grow the corpus or just the interface?
+   If only the interface — reconsider whether it belongs in this iteration.
+
+If any answer is wrong — acknowledge the misalignment. Correct the direction.
+Then build.
 
 ---
 
 ## Step 4 — Build
 
-Write the code. Do not describe it. Do not plan it out in prose.
-Write the migration, the route, the template, the test — whatever the item needs.
+Write the code. Do not describe it. Do not plan it in prose. Build it.
 
-One working unit per iteration. A working unit means:
-- The feature does what the backlog item says it does
-- It is tested (existing tests pass + new test if the item adds behavior)
-- It has no syntax errors (run the file if unsure)
+Target: one working unit per iteration. A working unit is the smallest thing
+that closes a gap in the loop — a route, a migration, a wired UI event, a test.
+
+If the gap is too large for one iteration: build the first logical slice,
+commit it, and continue from that slice next iteration.
 
 ---
 
@@ -65,34 +91,39 @@ One working unit per iteration. A working unit means:
 source .venv/bin/activate && python -m pytest tests/ -q --tb=short
 ```
 
-All tests must pass before committing. If they fail, fix them — do not skip.
-If a new test is needed, write it in `tests/`.
+All tests must pass. If they fail — fix them. If the item adds behaviour — write a test.
 
 ---
 
 ## Step 6 — Commit
 
 ```
-feat: <what was built> — closes [Loop Node Name] node
+feat: <what was built> — closes [loop node name]
 ```
 
-Include the loop node name in the commit message so the history is traceable.
-
 ---
 
-## Step 7 — Update BACKLOG.md
+## Step 7 — Check for milestone completion
 
-Mark the completed item done with: `— commit <hash> (date)`
-If partial: update the item description with what remains, leave it in Active.
-Add any newly discovered open nodes at the bottom of Active.
+Read the MILESTONES section of the spec. Run through each milestone's check
+questions against the live codebase.
 
----
+Ask yourself:
+> "Can I demonstrate this milestone end-to-end right now on the live site,
+> without explaining what it's supposed to do?"
 
-## Step 8 — Fire next iteration immediately
+**If a milestone is now complete:**
+1. Write a milestone report to MILESTONE_LOG.md:
+   - Which milestone was reached
+   - What was built to get here
+   - What each of the milestone's check questions now answers
+   - Any gaps found and corrected along the way
+   - What the next milestone requires
+2. Do NOT call ScheduleWakeup.
+3. Stop. Wait for the user to review and resume with /loop.
 
-Use ScheduleWakeup:
+**If no milestone is complete:**
+Call ScheduleWakeup:
 - prompt: `<<autonomous-loop-dynamic>>`
 - delaySeconds: 60
-- reason: "Synapse build loop — completed [item just done], next: [next backlog item]"
-
-The loop is the work. Keep it running.
+- reason: "Synapse build loop — completed [what you built], next gap: [what you found]"
