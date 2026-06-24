@@ -82,11 +82,15 @@ def rank_discussions_by_affinity(
 
     user_set = set(user_tags)
 
-    def _score(d: dict) -> int:
+    def _score(d: dict) -> float:
         disc_tags = set(d.get("topic_tags") or [])
-        # Also scan title words for affinity
         title_words = set(re.findall(r"[a-z]{5,}", (d.get("title") or "").lower()))
-        return len(disc_tags & user_set) + len(title_words & user_set)
+        tag_overlap = len(disc_tags & user_set) + len(title_words & user_set)
+        # Boost for discussions with high contributor counts — behavioral signal
+        contributor_signal = min(d.get("contributor_count", 0) / 10.0, 1.0) * 0.5
+        # Boost for answered/validated — they're worth returning to
+        status_boost = 0.3 if d.get("thread_status") in ("answered", "validated") else 0.0
+        return tag_overlap + contributor_signal + status_boost
 
     return sorted(discussions, key=_score, reverse=True)
 
