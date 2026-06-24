@@ -893,22 +893,27 @@ def api_ingest():
     try:
         from app.commit_pipeline import MemoryCommitPipeline
         pipeline = MemoryCommitPipeline()
-        result = pipeline.commit_candidate(
-            content=content,
-            memory_type=memory_type,
+        decision = pipeline.commit_candidate(
+            {
+                "content": content,
+                "memory_type": memory_type,
+                "scope": scope,
+                "should_store": True,
+            },
             source_key=f"{source_label}:{username}",
-            caller_id=username,
+            source_type="api",
+            source_user_id=username,
             visibility=visibility,
-            scope=scope,
         )
+        stored = decision.committed_atom_id is not None
         return jsonify({
-            "stored": result.get("stored", False),
-            "decision": result.get("decision"),
-            "atom_id": result.get("memory_atom_id"),
-            "signal_id": result.get("memory_signal_id"),
-            "quality_score": result.get("quality_score"),
-            "content": result.get("content"),
-        }), 200 if result.get("stored") else 202
+            "stored": stored,
+            "decision": decision.decision,
+            "atom_id": decision.committed_atom_id,
+            "signal_id": decision.committed_signal_id,
+            "confidence": decision.confidence,
+            "content": content,
+        }), 200 if stored else 202
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
