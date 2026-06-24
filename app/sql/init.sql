@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS memory_atoms (
 ALTER TABLE memory_atoms
 ADD COLUMN IF NOT EXISTS context_summary text;
 
+ALTER TABLE memory_atoms
+ADD COLUMN IF NOT EXISTS topic_tags TEXT[] NOT NULL DEFAULT '{}';
+
 -- Phase 4: signal-aggregation columns.
 ALTER TABLE memory_atoms ADD COLUMN IF NOT EXISTS support_weight     FLOAT NOT NULL DEFAULT 0.0;
 ALTER TABLE memory_atoms ADD COLUMN IF NOT EXISTS opposition_weight  FLOAT NOT NULL DEFAULT 0.0;
