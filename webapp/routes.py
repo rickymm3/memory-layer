@@ -857,6 +857,47 @@ def api_ingest():
 
 # ── Discussion routes ─────────────────────────────────────────────────────────
 
+@site_bp.route("/explore")
+@login_required
+def explore():
+    """Public feed of all auto-published discussions from low-confidence turns.
+
+    This is the browse surface where any user can see what conversations the AI
+    couldn't answer confidently and react to them. Reactions feed back into the
+    belief weighting pipeline for the originating user — invisibly.
+    """
+    rows = []
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT d.id, d.title, d.topic_tags, d.contributor_count,
+                           d.atom_count, d.thread_status, d.last_activity_at,
+                           d.summary, d.novelty_flag
+                    FROM discussions d
+                    WHERE d.auto_published = true
+                    ORDER BY d.last_activity_at DESC
+                    LIMIT 100;
+                    """
+                )
+                for r in cur.fetchall():
+                    rows.append({
+                        "id": str(r[0]),
+                        "title": r[1],
+                        "topic_tags": r[2] or [],
+                        "contributor_count": r[3],
+                        "atom_count": r[4],
+                        "thread_status": r[5] or "gathering",
+                        "last_activity": _ago(r[6]),
+                        "summary": r[7] or "",
+                        "novelty_flag": r[8],
+                    })
+    except Exception:
+        pass
+    return render_template("site/explore.html", discussions=rows)
+
+
 @site_bp.route("/discussions")
 @login_required
 def discussions():

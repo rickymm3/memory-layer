@@ -1,0 +1,75 @@
+{% extends "site/base.html" %}
+{% block title %}Explore — Synapse{% endblock %}
+
+{% block content %}
+<div class="cols">
+  <div>
+    <div class="page-header">
+      <h1>Explore</h1>
+      <p>Conversations from across the network. Browse what interests you and add your perspective — it shapes how everyone's AI answers this topic.</p>
+    </div>
+
+    {% if discussions %}
+      {% for d in discussions %}
+      <a href="{{ url_for('webapp.discussion_detail', disc_id=d.id) }}" class="disc-card">
+        <div style="display:flex;align-items:flex-start;gap:.75rem">
+          <div style="flex:1;min-width:0">
+            <div class="disc-card-title">
+              {% if d.novelty_flag %}<span class="badge badge-novel" style="margin-right:.4rem">★ novel</span>{% endif %}
+              {% set _status_styles = {
+                'gathering':  'background:#7c3aed;color:#fff',
+                'updated':    'background:#0ea5e9;color:#fff',
+                'answered':   'background:#16a34a;color:#fff',
+                'validated':  'background:#15803d;color:#fff',
+                'reopened':   'background:#d97706;color:#fff',
+                'unresolved': 'background:#6b7280;color:#fff',
+              } %}
+              {% if d.thread_status and d.thread_status not in ('active',) %}
+              <span class="badge" style="{{ _status_styles.get(d.thread_status, '') }};margin-right:.4rem;font-size:.68rem">
+                {{ d.thread_status }}
+              </span>
+              {% endif %}
+              {{ d.title }}
+            </div>
+            {% if d.summary %}
+            <div style="font-size:.84rem;color:var(--muted);margin-top:.35rem;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">
+              {{ d.summary }}
+            </div>
+            {% endif %}
+            <div class="disc-meta" style="margin-top:.4rem">
+              <span>{{ d.contributor_count }} contributor{{ 's' if d.contributor_count != 1 }}</span>
+              <span class="disc-meta-sep">{{ d.atom_count }} idea{{ 's' if d.atom_count != 1 }}</span>
+              <span class="disc-meta-sep">{{ d.last_activity }}</span>
+              {% for tag in d.topic_tags[:4] %}<span class="tag">{{ tag }}</span>{% endfor %}
+            </div>
+          </div>
+        </div>
+      </a>
+      {% endfor %}
+    {% else %}
+      <div class="empty">
+        <h3>Nothing here yet</h3>
+        <p style="margin-top:.4rem">
+          Conversations from across the network will appear here as they accumulate.
+          Start chatting — the AI will surface topics worth exploring.
+        </p>
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="sidebar">
+    <div class="widget">
+      <div class="widget-title">How this works</div>
+      <p style="font-size:.83rem;color:var(--muted);line-height:1.5">
+        These are real conversations people had with their AI. When the AI wasn't
+        sure of an answer, it posted the topic here. Your reaction shapes how the
+        AI answers this question for everyone — including the person who asked it.
+      </p>
+    </div>
+    <div class="widget">
+      <div class="widget-title">{{ discussions | length }} open topic{{ 's' if discussions | length != 1 }}</div>
+      <div style="font-size:.83rem;color:var(--muted)">Browse and add your perspective on any of them.</div>
+    </div>
+  </div>
+</div>
+{% endblock %}

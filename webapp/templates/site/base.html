@@ -174,6 +174,7 @@
   <div class="nav-links">
     {% if current_user.is_authenticated %}
       <a href="{{ url_for('webapp.landing') }}">Home</a>
+      <a href="{{ url_for('webapp.explore') }}">Explore</a>
       <a href="{{ url_for('webapp.discussions') }}">
         Discussions
         {% if unread_count > 0 %}<span class="nav-badge">{{ unread_count }}</span>{% endif %}

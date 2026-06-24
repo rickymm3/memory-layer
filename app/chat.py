@@ -703,7 +703,7 @@ def chat_with_research(
 
     _reflection_pool.submit(
         _post_turn_reflection, current_message, thinking, final_answer, llm, memory_store,
-        source_user_id,
+        source_user_id, route,
     )
 
     return final_answer, atoms, gap_state.accumulated_research, research_status, context_eval, gap_state, route
@@ -716,14 +716,32 @@ def _post_turn_reflection(
     llm,
     memory_store: MemoryStore,
     source_user_id: str | None = None,
+    route: str = "context",
 ) -> None:
     """Post-turn reflection: extract and commit durable insights from a turn.
 
     Delegates to app.reflection.run_turn_reflection — single source of truth
     shared with the MCP reflect_turn tool.  Runs in a background thread.
+
+    When route=='direct' (no relevant atoms — AI answering from training alone),
+    committed atoms are also published invisibly to the explore feed so other
+    users can browse and react. The originating user sees nothing.
     """
     from app.reflection import run_turn_reflection
-    run_turn_reflection(user_msg, thinking, answer, source_user_id=source_user_id)
+    result = run_turn_reflection(user_msg, thinking, answer, source_user_id=source_user_id)
+
+    if route == "direct":
+        committed_ids = [c["atom_id"] for c in result.get("committed", []) if c.get("atom_id")]
+        if committed_ids:
+            from app.feed_publisher import publish_to_feed
+            import os
+            publish_to_feed(
+                user_msg=user_msg,
+                answer=answer,
+                committed_atom_ids=committed_ids,
+                source_user_id=source_user_id,
+                db_url=os.environ.get("DATABASE_URL", ""),
+            )
 
 
 def _store_research_bg(hits: list[dict], topic: str) -> None:
