@@ -43,7 +43,8 @@ def synthesise_discussion(disc_id: str, db_url: str | None = None) -> str | None
                 cur.execute(
                     """
                     SELECT title, thread_status, created_by_user_id,
-                           EXTRACT(EPOCH FROM (now() - created_at)) / 3600 AS age_hours
+                           EXTRACT(EPOCH FROM (now() - created_at)) / 3600 AS age_hours,
+                           topic_tags
                     FROM discussions WHERE id = %s;
                     """,
                     (disc_id,),
@@ -51,7 +52,7 @@ def synthesise_discussion(disc_id: str, db_url: str | None = None) -> str | None
                 disc_row = cur.fetchone()
                 if not disc_row:
                     return None
-                disc_title, current_status, creator_user_id, age_hours = disc_row
+                disc_title, current_status, creator_user_id, age_hours, disc_topic_tags = disc_row
 
                 # Don't re-synthesise if already answered/validated
                 if current_status in ("answered", "validated"):
@@ -131,7 +132,24 @@ def synthesise_discussion(disc_id: str, db_url: str | None = None) -> str | None
         if not atom_id:
             return None
 
-        # Link synthesis atom to discussion and advance status
+        # Propagate discussion topic_tags to the synthesis atom so topic_matcher
+        # and affinity ranking can work from the atom directly.
+        if disc_topic_tags:
+            try:
+                with psycopg.connect(db_url) as _tc:
+                    with _tc.cursor() as _cur:
+                        _cur.execute(
+                            "UPDATE memory_atoms SET topic_tags = %s WHERE id = %s;",
+                            (disc_topic_tags, atom_id),
+                        )
+                    _tc.commit()
+            except Exception:
+                pass  # non-fatal — atom is still valid without tags
+
+        # Link synthesis atom to discussion.
+        # Status progression per spec:
+        #   dual-write complete → 'updated' (fire notification)
+        #   notification inserted → 'answered' (enriched summary ready)
         with psycopg.connect(db_url) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -143,11 +161,36 @@ def synthesise_discussion(disc_id: str, db_url: str | None = None) -> str | None
                     """,
                     (disc_id, atom_id),
                 )
+                # Step 1: mark 'updated' — dual-write is complete
                 cur.execute(
                     """
                     UPDATE discussions
-                    SET thread_status = 'answered',
+                    SET thread_status = 'updated',
                         last_activity_at = now()
+                    WHERE id = %s;
+                    """,
+                    (disc_id,),
+                )
+                # Step 2: fire 'answered' notification for the originating user
+                cur.execute(
+                    """
+                    INSERT INTO user_notifications
+                        (user_id, discussion_id, new_atom_count, notification_type)
+                    SELECT d.created_by_user_id, d.id, 1, 'answered'
+                    FROM discussions d
+                    WHERE d.id = %s
+                      AND d.created_by_user_id IS NOT NULL
+                    ON CONFLICT (user_id, discussion_id) WHERE read = false
+                    DO UPDATE SET new_atom_count = user_notifications.new_atom_count + 1,
+                                  notification_type = 'answered';
+                    """,
+                    (disc_id,),
+                )
+                # Step 3: advance to 'answered' — enriched summary now deliverable
+                cur.execute(
+                    """
+                    UPDATE discussions
+                    SET thread_status = 'answered'
                     WHERE id = %s;
                     """,
                     (disc_id,),
