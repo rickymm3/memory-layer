@@ -5,6 +5,7 @@ from typing import Any
 from app.commit_pipeline import MemoryCommitPipeline
 from app.db import get_store
 from app.write_quality import score_write_quality
+from mcp_server.auth_context import current_user_id
 
 
 def store_memory_auto(
@@ -45,6 +46,10 @@ def store_memory_auto(
         reconciliation_reason: Reconciler's reason string, if any.
         matched_memory_ids: Related existing atom UUIDs from reconciliation.
     """
+    # Fall back to SSE auth context if no explicit source_user_id provided
+    if source_user_id is None:
+        source_user_id = current_user_id.get()
+
     # ── Epistemic classifier (replaces old quality gate) ──────────────────────
     quality = score_write_quality(content, memory_type=memory_type, stated_importance=importance, scope=scope)
     if quality.decision == "reject":

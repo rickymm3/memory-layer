@@ -2293,8 +2293,15 @@ class MemoryStore:
         scope: str | None = None,
         memory_type: str | None = None,
         min_similarity: float = 0.0,
+        requesting_user: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Semantic search with signals summary included."""
+        """Semantic search with signals summary included.
+
+        When requesting_user is set (SSE/hosted mode), returns only:
+          - atoms owned by that user (source_user_id = requesting_user)
+          - atoms with visibility = 'public'
+        When requesting_user is None (stdio/local mode), returns all atoms.
+        """
         embedding = self.ollama.embed_text(query)
         embedding_literal = self._vector_literal(embedding)
         clamped_min_similarity = max(0.0, min(float(min_similarity), 1.0))
@@ -2307,6 +2314,9 @@ class MemoryStore:
         if memory_type:
             where_clauses.append("memory_type = %s")
             filter_params.append(memory_type)
+        if requesting_user:
+            where_clauses.append("(visibility = 'public' OR source_user_id = %s)")
+            filter_params.append(requesting_user)
         where_sql = "WHERE " + " AND ".join(where_clauses)
         params: list[Any] = [embedding_literal] + filter_params + [embedding_literal, limit]
 

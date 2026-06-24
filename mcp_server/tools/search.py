@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.db import get_store
+from mcp_server.auth_context import current_user_id
 
 
 def search_memories(
@@ -13,6 +14,9 @@ def search_memories(
     min_similarity: float = 0.0,
 ) -> list[dict[str, Any]]:
     """Search memory atoms by semantic similarity with optional filters.
+
+    In SSE/hosted mode (Bearer token present), returns only atoms owned by
+    the authenticated user plus public atoms. In stdio/local mode, returns all.
 
     Args:
         min_similarity: Minimum cosine similarity (0.0–1.0). Default 0.0.
@@ -25,4 +29,5 @@ def search_memories(
         scope=scope,
         memory_type=memory_type,
         min_similarity=min_similarity,
+        requesting_user=current_user_id.get(),
     )

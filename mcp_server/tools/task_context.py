@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.db import get_store
+from mcp_server.auth_context import current_user_id
 
 
 def get_task_context(

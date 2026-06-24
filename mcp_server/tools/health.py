@@ -4,6 +4,7 @@ import requests
 
 from app.config import get_config
 from app.db import get_store
+from mcp_server.auth_context import current_user_id
 
 
 def get_memory_health() -> dict:
@@ -13,6 +14,7 @@ def get_memory_health() -> dict:
     """
     result: dict = {
         "status": "ok",
+        "authenticated_as": current_user_id.get(),  # None when called via stdio
         "atom_count": None,
         "available_scopes": None,
         "embedding_model": None,
