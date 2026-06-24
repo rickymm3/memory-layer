@@ -196,7 +196,9 @@ def publish_to_feed(
                             """
                             INSERT INTO user_notifications
                                 (user_id, discussion_id, new_atom_count, notification_type)
-                            VALUES (%s, %s, 0, 'published');
+                            VALUES (%s, %s, 0, 'published')
+                            ON CONFLICT (user_id, discussion_id) WHERE read = false
+                            DO UPDATE SET notification_type = 'published';
                             """,
                             (str(user_uuid), str(disc_id)),
                         )
