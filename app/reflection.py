@@ -17,6 +17,7 @@ def run_turn_reflection(
     thinking: str,
     answer: str,
     scope: str | None = None,
+    source_user_id: str | None = None,
 ) -> dict[str, Any]:
     """Extract durable insights from a conversation turn and commit them.
 
@@ -81,7 +82,7 @@ def run_turn_reflection(
 
     for candidate in candidates:
         try:
-            decision = pipeline.commit_candidate(candidate)
+            decision = pipeline.commit_candidate(candidate, source_user_id=source_user_id)
             d = decision.to_dict()
             if d.get("write_action") in ("proposed", "mark_conflict", "propose_for_review"):
                 proposed.append({

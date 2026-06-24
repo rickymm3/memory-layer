@@ -560,6 +560,7 @@ def chat_with_history(messages: list[dict], limit: int = 5) -> tuple[str, list[d
 def chat_with_research(
     messages: list[dict],
     limit: int = 5,
+    source_user_id: str | None = None,
 ) -> tuple[str, list[dict], list[dict], str, "ContextEvaluation | None", GapResolutionState, str]:  # type: ignore[name-defined]  # noqa: F821
     """Multi-turn chat routed by memory retrieval signal.
 
@@ -701,7 +702,8 @@ def chat_with_research(
             pass
 
     _reflection_pool.submit(
-        _post_turn_reflection, current_message, thinking, final_answer, llm, memory_store
+        _post_turn_reflection, current_message, thinking, final_answer, llm, memory_store,
+        source_user_id,
     )
 
     return final_answer, atoms, gap_state.accumulated_research, research_status, context_eval, gap_state, route
@@ -713,6 +715,7 @@ def _post_turn_reflection(
     answer: str,
     llm,
     memory_store: MemoryStore,
+    source_user_id: str | None = None,
 ) -> None:
     """Post-turn reflection: extract and commit durable insights from a turn.
 
@@ -720,7 +723,7 @@ def _post_turn_reflection(
     shared with the MCP reflect_turn tool.  Runs in a background thread.
     """
     from app.reflection import run_turn_reflection
-    run_turn_reflection(user_msg, thinking, answer)
+    run_turn_reflection(user_msg, thinking, answer, source_user_id=source_user_id)
 
 
 def _store_research_bg(hits: list[dict], topic: str) -> None:

@@ -1073,7 +1073,8 @@ def chat():
                 ] + [{"role": "user", "content": message}]
 
                 raw_answer, memories, research_results, research_status, context_eval, gap_state, route = chat_with_research(
-                    messages_for_llm
+                    messages_for_llm,
+                    source_user_id=current_user.username,
                 )
                 answer = clean_assistant_response(raw_answer)
 
