@@ -1030,6 +1030,89 @@ def discussion_detail(disc_id):
                            contributions=contributions, related=related)
 
 
+@site_bp.route("/discussion/<uuid:disc_id>/react", methods=["POST"])
+@login_required
+def discussion_react(disc_id):
+    """Accept a perspective from any browsing user and feed it into the pipeline.
+
+    The perspective is committed as a memory atom through the full write pipeline
+    (quality → reconcile → critic → risk gate → dual-write). The new atom is
+    linked to the discussion. The discussion's contributor count and
+    last_activity_at are updated. A notification is queued for the originating
+    user — they receive a synthesis later, not the raw text.
+    """
+    perspective = (request.form.get("perspective") or "").strip()
+    if not perspective or len(perspective) < 10:
+        flash("Perspective is too short.", "error")
+        return redirect(url_for("webapp.discussion_detail", disc_id=disc_id))
+
+    try:
+        from app.commit_pipeline import MemoryCommitPipeline
+
+        pipeline = MemoryCommitPipeline()
+        candidate = {
+            "content": perspective,
+            "memory_type": "observation",
+            "scope": f"discussion:{disc_id}",
+            "importance": 0.6,
+            "should_store": True,
+        }
+        decision = pipeline.commit_candidate(
+            candidate,
+            source_key=current_user.username,
+            source_type="user_reaction",
+            source_user_id=current_user.username,
+        )
+        atom_id = decision.committed_atom_id
+
+        if atom_id:
+            with _conn() as conn:
+                with conn.cursor() as cur:
+                    # Link new atom to discussion
+                    cur.execute(
+                        """
+                        INSERT INTO discussion_atoms
+                            (discussion_id, atom_id, source_user_id, novelty_score)
+                        VALUES (%s, %s, %s, 0.5)
+                        ON CONFLICT (discussion_id, atom_id) DO NOTHING;
+                        """,
+                        (str(disc_id), atom_id, current_user.username),
+                    )
+                    # Update discussion activity and contributor count
+                    cur.execute(
+                        """
+                        UPDATE discussions
+                        SET last_activity_at = now(),
+                            contributor_count = contributor_count + 1,
+                            atom_count = atom_count + 1
+                        WHERE id = %s;
+                        """,
+                        (str(disc_id),),
+                    )
+                    # Queue notification for the discussion creator (not the reactor)
+                    cur.execute(
+                        """
+                        INSERT INTO user_notifications
+                            (user_id, discussion_id, new_atom_count)
+                        SELECT d.created_by_user_id, d.id, 1
+                        FROM discussions d
+                        WHERE d.id = %s
+                          AND d.created_by_user_id IS NOT NULL
+                          AND d.created_by_user_id != (SELECT id FROM users WHERE username = %s);
+                        """,
+                        (str(disc_id), current_user.username),
+                    )
+                conn.commit()
+            flash("Your perspective has been added.", "success")
+        else:
+            flash("Your perspective was noted but didn't produce new insight.", "info")
+    except Exception as exc:
+        flash("Something went wrong. Please try again.", "error")
+        _logger.warning("discussion_react: %s", exc)
+
+    return redirect(url_for("webapp.discussion_detail", disc_id=disc_id))
+
+
 def _unread_notification_count(username: str) -> int:
     try:
         with _conn() as conn:

@@ -47,17 +47,35 @@
         </div>
         {% endfor %}
 
-        <div style="margin-top:1.5rem;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:1rem">
-          <p style="font-size:.83rem;color:var(--muted)">
-            To add your perspective, talk to your AI about this topic and make the atom public in your
-            <a href="{{ url_for('webapp.brain') }}">brain</a>.
-            It will appear here after the next clustering run.
+        <div style="margin-top:1.5rem;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem">
+          <div style="font-size:.88rem;font-weight:600;margin-bottom:.6rem">Add your perspective</div>
+          <p style="font-size:.82rem;color:var(--muted);margin-bottom:.85rem;line-height:1.45">
+            What do you know about this topic? Your input shapes how the AI answers this question for everyone.
+            You won't appear in any thread — it goes directly into the knowledge pipeline.
           </p>
+          <form method="post" action="{{ url_for('webapp.discussion_react', disc_id=disc.id) }}">
+            <textarea name="perspective" rows="3" placeholder="Share what you know…"
+              style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--radius);
+                     color:var(--text);padding:.65rem .75rem;font-size:.87rem;line-height:1.5;resize:vertical;
+                     font-family:var(--font);margin-bottom:.65rem"
+              required minlength="10"></textarea>
+            <button type="submit" class="btn btn-primary btn-sm">Submit perspective</button>
+          </form>
         </div>
       {% else %}
-        <div class="empty">
-          <h3>No contributions yet</h3>
-          <p style="margin-top:.4rem">Be the first to contribute to this discussion.</p>
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem;margin-bottom:1rem">
+          <div style="font-size:.88rem;font-weight:600;margin-bottom:.6rem">Be the first to add a perspective</div>
+          <p style="font-size:.82rem;color:var(--muted);margin-bottom:.85rem;line-height:1.45">
+            What do you know about this topic? Your input shapes how the AI answers this question for everyone.
+          </p>
+          <form method="post" action="{{ url_for('webapp.discussion_react', disc_id=disc.id) }}">
+            <textarea name="perspective" rows="3" placeholder="Share what you know…"
+              style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--radius);
+                     color:var(--text);padding:.65rem .75rem;font-size:.87rem;line-height:1.5;resize:vertical;
+                     font-family:var(--font);margin-bottom:.65rem"
+              required minlength="10"></textarea>
+            <button type="submit" class="btn btn-primary btn-sm">Submit perspective</button>
+          </form>
         </div>
       {% endif %}
     </div>
