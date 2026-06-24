@@ -23,6 +23,13 @@
       </div>
     </div>
 
+    {% if disc.revision_flag %}
+    <div style="background:rgba(248,113,113,.07);border:1px solid rgba(248,113,113,.25);border-radius:var(--radius);padding:.75rem 1.1rem;margin-bottom:1rem;font-size:.84rem;display:flex;align-items:center;gap:.6rem">
+      <span style="color:var(--red);font-weight:600">⚠ This answer may have changed.</span>
+      <span style="color:var(--muted)">New perspectives conflict with what was previously believed.</span>
+    </div>
+    {% endif %}
+
     {% if disc.thread_status == 'reopened' %}
     <div style="background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.25);border-radius:var(--radius);padding:.9rem 1.1rem;margin-bottom:1.25rem">
       <div style="font-size:.87rem;font-weight:600;color:var(--amber)">New information arrived</div>

@@ -1110,7 +1110,8 @@ def discussion_detail(disc_id):
         with _conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, title, topic_tags, contributor_count, novelty_flag, last_activity_at "
+                    "SELECT id, title, topic_tags, contributor_count, novelty_flag, "
+                    "last_activity_at, thread_status "
                     "FROM discussions WHERE id = %s;",
                     (str(disc_id),),
                 )
@@ -1120,6 +1121,7 @@ def discussion_detail(disc_id):
                         "id": str(r[0]), "title": r[1], "topic_tags": r[2] or [],
                         "contributor_count": r[3], "novelty_flag": r[4],
                         "last_activity": r[5].strftime("%Y-%m-%d") if r[5] else "—",
+                        "thread_status": r[6] or "active",
                     }
                 cur.execute(
                     """
@@ -1146,6 +1148,19 @@ def discussion_detail(disc_id):
                         "added_at": r[5].strftime("%Y-%m-%d") if r[5] else "—",
                         "topic_tags": r[6] or [],
                     })
+                # Check if any linked atom has high disagreement (flagged for revision)
+                cur.execute(
+                    """
+                    SELECT 1 FROM discussion_atoms da
+                    JOIN memory_atoms ma ON ma.id = da.atom_id
+                    WHERE da.discussion_id = %s AND ma.disagreement_score > 0.5
+                    LIMIT 1;
+                    """,
+                    (str(disc_id),),
+                )
+                revision_flag = cur.fetchone() is not None
+                if disc:
+                    disc["revision_flag"] = revision_flag
                 # Mark notifications read
                 cur.execute(
                     """
