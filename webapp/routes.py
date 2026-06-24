@@ -911,6 +911,71 @@ def explore():
     return render_template("site/explore.html", discussions=rows)
 
 
+@site_bp.route("/categories")
+@login_required
+def categories():
+    """Browse discussions by topic tag — no profile required."""
+    selected = request.args.get("tag", "").strip().lower()
+    all_tags: list[str] = []
+    tag_counts: dict[str, int] = {}
+    discussions: list[dict] = []
+
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                # Aggregate all topic tags across published discussions
+                cur.execute(
+                    """
+                    SELECT unnest(topic_tags) AS tag, COUNT(*) AS cnt
+                    FROM discussions
+                    WHERE auto_published = true
+                    GROUP BY tag
+                    ORDER BY cnt DESC, tag ASC
+                    LIMIT 60;
+                    """
+                )
+                for r in cur.fetchall():
+                    tag_counts[r[0]] = r[1]
+                    all_tags.append(r[0])
+
+                if selected and selected in tag_counts:
+                    cur.execute(
+                        """
+                        SELECT d.id, d.title, d.topic_tags, d.contributor_count,
+                               d.atom_count, d.thread_status, d.last_activity_at,
+                               d.summary, d.novelty_flag
+                        FROM discussions d
+                        WHERE d.auto_published = true
+                          AND %s = ANY(d.topic_tags)
+                        ORDER BY d.last_activity_at DESC
+                        LIMIT 50;
+                        """,
+                        (selected,),
+                    )
+                    for r in cur.fetchall():
+                        discussions.append({
+                            "id": str(r[0]),
+                            "title": r[1],
+                            "topic_tags": r[2] or [],
+                            "contributor_count": r[3],
+                            "atom_count": r[4],
+                            "thread_status": r[5] or "gathering",
+                            "last_activity": _ago(r[6]),
+                            "summary": r[7] or "",
+                            "novelty_flag": r[8],
+                        })
+    except Exception:
+        pass
+
+    return render_template(
+        "site/categories.html",
+        all_tags=all_tags,
+        tag_counts=tag_counts,
+        selected=selected,
+        discussions=discussions,
+    )
+
+
 @site_bp.route("/discussions")
 @login_required
 def discussions():

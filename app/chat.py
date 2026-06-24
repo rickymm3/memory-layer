@@ -733,15 +733,17 @@ def _post_turn_reflection(
     if route == "direct":
         committed_ids = [c["atom_id"] for c in result.get("committed", []) if c.get("atom_id")]
         if committed_ids:
-            from app.feed_publisher import publish_to_feed
-            import os
-            publish_to_feed(
-                user_msg=user_msg,
-                answer=answer,
-                committed_atom_ids=committed_ids,
-                source_user_id=source_user_id,
-                db_url=os.environ.get("DATABASE_URL", ""),
-            )
+            import os as _os
+            _db_url = _os.environ.get("DATABASE_URL", "")
+            from app.feed_publisher import publish_to_feed, _worth_surfacing
+            if _worth_surfacing(committed_ids, _db_url):
+                publish_to_feed(
+                    user_msg=user_msg,
+                    answer=answer,
+                    committed_atom_ids=committed_ids,
+                    source_user_id=source_user_id,
+                    db_url=_db_url,
+                )
 
 
 def _store_research_bg(hits: list[dict], topic: str) -> None:

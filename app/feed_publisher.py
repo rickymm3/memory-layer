@@ -15,6 +15,7 @@ import re
 _logger = logging.getLogger(__name__)
 
 _MAX_TITLE_LEN = 100
+_NOVELTY_GATE = 0.55  # minimum novelty_score to warrant a post; interest_flag always passes
 
 
 def _make_title(user_msg: str) -> str:
@@ -50,6 +51,35 @@ def _extract_tags(user_msg: str, answer: str) -> list[str]:
             seen[w] = seen.get(w, 0) + 1
     ranked = sorted(seen, key=lambda w: -seen[w])
     return ranked[:5]
+
+
+def _worth_surfacing(atom_ids: list[str], db_url: str) -> bool:
+    """Return True if any atom clears the novelty gate.
+
+    Checks interest_flag=true OR novelty_score >= _NOVELTY_GATE.
+    Defaults to False on any DB failure so the gate is conservative.
+    """
+    if not atom_ids or not db_url:
+        return False
+    try:
+        import psycopg
+        with psycopg.connect(db_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT interest_flag, novelty_score
+                    FROM memory_atoms
+                    WHERE id = ANY(%s::uuid[]);
+                    """,
+                    (atom_ids,),
+                )
+                for row in cur.fetchall():
+                    interest, novelty = row[0], float(row[1] or 0.0)
+                    if interest or novelty >= _NOVELTY_GATE:
+                        return True
+    except Exception:
+        pass
+    return False
 
 
 def publish_to_feed(
