@@ -108,3 +108,18 @@ def test_ingest_response_has_no_internal_vocab(monkeypatch):
     body = json.dumps(json.loads(r.data))
     for internal in ("memory_atom", "candidate", "lifecycle", "reconcil", "critic"):
         assert internal not in body, f"internal term '{internal}' leaked into API response"
+
+
+def test_ingest_guardrail_blocks_credentials(monkeypatch):
+    """Deterministic guardrail must reject API keys/passwords before pipeline."""
+    client = _make_app(monkeypatch)
+    # Content that looks like an API key should be blocked before commit_candidate runs
+    r = client.post(
+        "/api/ingest",
+        json={"content": "My API key is sk-abcdefghijklmnop1234567890ABCDEF"},
+        headers={"Authorization": "Bearer valid-token"},
+    )
+    assert r.status_code == 400
+    data = json.loads(r.data)
+    assert data["stored"] is False
+    assert data["decision"] == "rejected"
