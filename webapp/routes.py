@@ -1369,14 +1369,15 @@ def discussion_react(disc_id):
                     )
                 conn.commit()
             # Trigger synthesis in background — non-blocking
-            from concurrent.futures import ThreadPoolExecutor
+            import threading as _threading
             from app.discussion_synthesizer import synthesise_discussion
             import os as _os
             _db_url = _os.environ.get("DATABASE_URL", "")
             _disc_id_str = str(disc_id)
-            ThreadPoolExecutor(max_workers=1).submit(
-                synthesise_discussion, _disc_id_str, _db_url
+            _t = _threading.Thread(
+                target=synthesise_discussion, args=(_disc_id_str, _db_url), daemon=True
             )
+            _t.start()
             flash("Your perspective has been added.", "success")
         else:
             flash("Your perspective was noted but didn't produce new insight.", "info")
