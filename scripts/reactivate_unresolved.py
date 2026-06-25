@@ -85,8 +85,7 @@ def widen_routing(disc: dict, db_url: str, dry_run: bool) -> int:
                         """,
                         (user_id, disc["id"]),
                     )
-                    if conn.pgconn.transaction_status != 0:
-                        sent += 1
+                    sent += cur.rowcount
                 except Exception:
                     pass
             cur.execute(
