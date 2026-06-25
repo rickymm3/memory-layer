@@ -152,19 +152,26 @@ CREATE INDEX IF NOT EXISTS idx_memory_signals_source_user_id    ON memory_signal
 -- Users: identity anchor for multi-user attribution.
 -- Not an auth system — passwords/sessions belong in the dashboard web layer.
 CREATE TABLE IF NOT EXISTS users (
-    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    username     TEXT        NOT NULL UNIQUE,
-    email        TEXT        UNIQUE,
-    display_name TEXT,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_seen_at TIMESTAMPTZ
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    username        TEXT        NOT NULL UNIQUE,
+    email           TEXT        UNIQUE,
+    display_name    TEXT,
+    password_hash   TEXT,
+    api_token       TEXT        UNIQUE DEFAULT gen_random_uuid()::text,
+    is_admin        BOOLEAN     NOT NULL DEFAULT false,
+    is_active       BOOLEAN     NOT NULL DEFAULT true,
+    usefulness_score FLOAT      NOT NULL DEFAULT 0.0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at    TIMESTAMPTZ
 );
-CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-CREATE INDEX IF NOT EXISTS idx_users_email    ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_username       ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_email          ON users(email);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_token ON users(api_token);
+CREATE INDEX IF NOT EXISTS idx_users_usefulness_score ON users(usefulness_score DESC);
 
 -- Default local user so source_user_id='local_user' signals can be resolved.
-INSERT INTO users (username, display_name, created_at)
-VALUES ('local_user', 'Local User', now())
+INSERT INTO users (username, display_name, is_admin, created_at)
+VALUES ('local_user', 'Local User', true, now())
 ON CONFLICT (username) DO NOTHING;
 
 -- Phase 7: task_runs — per-task provenance for reflect_task.py runs.
