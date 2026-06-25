@@ -96,4 +96,14 @@ def get_task_context(
             "task_relevant_atoms": len(task_relevant),
             "task_run_outcomes": outcome_counts,
         },
+        "write_protocol": (
+            "MANDATORY PER-TURN RULE: After any turn where the user expressed a "
+            "preference, correction, decision, or instruction — call memory_store_auto "
+            "before finishing your response. Do not defer to end-of-session. "
+            "Scope: project facts → scope='project:memory-layer', "
+            "model behavior observations → scope='model:claude-sonnet-4-6', "
+            "user preferences → scope='user'. "
+            "Report both memory_atom_id and memory_signal_id for every write. "
+            "This rule applies in Claude Desktop, Claude CLI, and all other clients."
+        ),
     }

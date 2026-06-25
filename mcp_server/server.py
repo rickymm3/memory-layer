@@ -37,7 +37,14 @@ from mcp_server.tools.find_duplicates import find_duplicate_atoms
 from mcp_server.tools.link_atoms import link_atoms
 from mcp_server.tools.related_atoms import get_related_atoms
 
-mcp = FastMCP("memoryLayer")
+_WRITE_PROTOCOL = """After any turn where the user expressed a preference, correction, decision, or instruction:
+1. Call memory_store_auto BEFORE finishing your response — not at end-of-session.
+2. Report both memory_atom_id and memory_signal_id.
+3. Scope: project facts → 'project:<name>', model observations → 'model:claude-sonnet-4-6', user preferences → 'user'.
+4. Content must be self-contained — no session-internal names like "Phase N" or "as discussed".
+Triggers: preferences with reasons, architecture decisions, corrections, frustration/satisfaction signals."""
+
+mcp = FastMCP("memoryLayer", instructions=_WRITE_PROTOCOL)
 
 
 @mcp.tool()
