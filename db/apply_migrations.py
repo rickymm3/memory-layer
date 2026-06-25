@@ -19,8 +19,21 @@ load_dotenv()
 def apply_migrations(database_url: str) -> None:
     migrations_dir = Path(__file__).parent / "migrations"
     sql_files = sorted(migrations_dir.glob("*.sql"))
+    init_sql_path = Path(__file__).parent / "init.sql"
 
     with psycopg.connect(database_url) as conn:
+        # Seed base schema on fresh databases before any migration runs.
+        # Migrations assume memory_atoms and users already exist (created by init.sql).
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT to_regclass('public.memory_atoms');"
+            )
+            if cur.fetchone()[0] is None and init_sql_path.exists():
+                print("  seed  init.sql (fresh database)")
+                cur.execute(init_sql_path.read_text())
+
+        conn.commit()
+
         with conn.cursor() as cur:
             cur.execute(
                 """
