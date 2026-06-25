@@ -1196,7 +1196,21 @@ def discussion_detail(disc_id):
                         "contributor_count": r[3], "novelty_flag": r[4],
                         "last_activity": r[5].strftime("%Y-%m-%d") if r[5] else "—",
                         "thread_status": r[6] or "active",
+                        "revision_flag": False,  # set below if contested atoms found
                     }
+                # Check if any linked atoms are contested — triggers revision badge
+                if disc:
+                    cur.execute(
+                        """
+                        SELECT 1 FROM discussion_atoms da
+                        JOIN memory_atoms ma ON ma.id = da.atom_id
+                        WHERE da.discussion_id = %s
+                          AND ma.lifecycle_status = 'contested'
+                        LIMIT 1;
+                        """,
+                        (str(disc_id),),
+                    )
+                    disc["revision_flag"] = cur.fetchone() is not None
                 cur.execute(
                     """
                     SELECT ma.content, ma.memory_type, ma.confidence,
