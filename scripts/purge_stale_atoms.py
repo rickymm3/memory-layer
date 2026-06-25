@@ -35,13 +35,13 @@ def purge_stale(days: int = 365, scope: str | None = None, commit: bool = False)
         SELECT COUNT(*), MIN(last_accessed_at), MAX(last_accessed_at)
         FROM memory_atoms
         WHERE last_accessed_at IS NOT NULL
-          AND last_accessed_at < NOW() - INTERVAL '%(days)s days'
+          AND last_accessed_at < NOW() - (%(days)s * INTERVAL '1 day')
           {scope_clause};
     """
     delete_sql = f"""
         DELETE FROM memory_atoms
         WHERE last_accessed_at IS NOT NULL
-          AND last_accessed_at < NOW() - INTERVAL '%(days)s days'
+          AND last_accessed_at < NOW() - (%(days)s * INTERVAL '1 day')
           {scope_clause}
         RETURNING id;
     """
