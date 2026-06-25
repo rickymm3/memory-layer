@@ -6,6 +6,7 @@ mcp==1.27.1
 psycopg[binary]>=3.1
 requests>=2.28.0
 python-dotenv>=1.0.0
+pytest>=8.0
 
 # Optional providers — install as needed for your LLM setup:
 # Anthropic Claude (required for CHAT_PROVIDER=anthropic)
