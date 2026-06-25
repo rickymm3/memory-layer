@@ -242,8 +242,8 @@ def _notify_matched_users(
                         cur.execute(
                             """
                             INSERT INTO user_notifications
-                                (user_id, discussion_id, new_atom_count)
-                            VALUES (%s::uuid, %s::uuid, 0)
+                                (user_id, discussion_id, new_atom_count, notification_type)
+                            VALUES (%s::uuid, %s::uuid, 0, 'published')
                             ON CONFLICT DO NOTHING;
                             """,
                             (user_id, disc_id),
