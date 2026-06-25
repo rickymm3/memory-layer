@@ -159,7 +159,7 @@
         <div>
           <div class="bubble">{{ msg.content }}</div>
 
-          {% if msg.route == 'direct' %}
+          {% if msg.was_routed %}
           <div style="margin:.4rem 0 .2rem;padding:.4rem .65rem;background:rgba(99,102,241,.07);border-left:3px solid rgba(99,102,241,.35);border-radius:4px;font-size:.82rem;color:var(--muted)">
             We've shared this with others who may have more context. You'll be notified if new information arrives.
           </div>

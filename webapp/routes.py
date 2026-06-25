@@ -1646,16 +1646,19 @@ def chat():
                     for m in history
                 ] + [{"role": "user", "content": message}]
 
+                from app.chat import _is_routeable_question
                 raw_answer, memories, research_results, research_status, context_eval, gap_state, route = chat_with_research(
                     messages_for_llm,
                     source_user_id=current_user.username,
                 )
                 answer = clean_assistant_response(raw_answer)
+                was_routed = route == "direct" and _is_routeable_question(message)
 
                 history.append({"role": "user", "content": message})
                 history.append({
                     "role": "assistant",
                     "content": answer,
+                    "was_routed": was_routed,
                     "memories": [
                         {
                             "id": str(m.get("id", "")),
