@@ -8,6 +8,12 @@ INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('session_id') or '')" 2>/dev/null)
 MARKER="$HOME/.claude/memory-sessions/${SESSION_ID}.initialized"
 
+# New turn starting — clear the per-turn write marker so Stop hook can track fresh
+if [ -n "$SESSION_ID" ]; then
+    rm -f "$HOME/.claude/memory-sessions/${SESSION_ID}.wrote-this-turn"
+    rm -f "$HOME/.claude/memory-sessions/${SESSION_ID}.stop-block-count"
+fi
+
 # Already initialized this session — stay silent
 if [ -n "$SESSION_ID" ] && [ -f "$MARKER" ]; then
     exit 0
