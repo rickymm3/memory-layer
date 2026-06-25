@@ -49,6 +49,7 @@ def landing():
     novel = []
     new_since_visit: list[dict] = []
     last_seen_at = None
+    user_atom_count = 0
     try:
         with _conn() as conn:
             with conn.cursor() as cur:
@@ -60,6 +61,19 @@ def landing():
                     )
                     row = cur.fetchone()
                     last_seen_at = row[0] if row else None
+
+                    # Count own atoms to differentiate new vs returning users in UI
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) FROM memory_atoms ma
+                        JOIN memory_signals ms ON ms.memory_atom_id = ma.id
+                        WHERE ms.source_user_id = %s AND ma.lifecycle_status = 'active'
+                        LIMIT 1;
+                        """,
+                        (current_user.username,),
+                    )
+                    cnt_row = cur.fetchone()
+                    user_atom_count = int(cnt_row[0]) if cnt_row else 0
                     if last_seen_at:
                         cur.execute(
                             """
@@ -119,7 +133,8 @@ def landing():
     except Exception:
         pass
     return render_template("site/landing.html", recent=recent, novel=novel,
-                           new_since_visit=new_since_visit, last_seen_at=last_seen_at)
+                           new_since_visit=new_since_visit, last_seen_at=last_seen_at,
+                           user_atom_count=user_atom_count)
 
 
 @site_bp.route("/signup", methods=["GET", "POST"])

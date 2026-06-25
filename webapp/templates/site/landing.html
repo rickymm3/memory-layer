@@ -21,10 +21,18 @@
 
     {% if current_user.is_authenticated %}
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:1rem 1.25rem;margin-bottom:1.25rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+      {% if user_atom_count == 0 %}
+      <div>
+        <div style="font-size:.9rem;font-weight:600;margin-bottom:.2rem">Start your first conversation</div>
+        <div style="font-size:.82rem;color:var(--muted)">Your AI will remember what you discuss and surface it when others are thinking the same things.</div>
+      </div>
+      <a href="{{ url_for('webapp.chat') }}" class="btn btn-primary btn-sm" style="white-space:nowrap">Start chatting →</a>
+      {% else %}
       <div style="font-size:.88rem;color:var(--muted)">
         Continue your conversation — your AI remembers everything you've discussed.
       </div>
       <a href="{{ url_for('webapp.chat') }}" class="btn btn-primary btn-sm" style="white-space:nowrap">Open chat →</a>
+      {% endif %}
     </div>
     {% endif %}
 

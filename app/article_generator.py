@@ -173,12 +173,17 @@ def generate_draft(
             row = cur.fetchone()
             author_id = str(row[0]) if row else None
 
+            # source_turn_text: first atom's content so /drafts can show
+            # "From your conversation: ..." without the user needing to dig in.
+            source_hint = atoms[0]["content"][:500] if atoms else None
+
             cur.execute(
                 """
                 INSERT INTO social_posts
                     (title, body, format, status, author_user_id,
-                     primary_atom_ids, topic_tags, confidence_at_publish)
-                VALUES (%s, %s, %s, 'draft', %s, %s, %s, %s)
+                     primary_atom_ids, topic_tags, confidence_at_publish,
+                     source_turn_text)
+                VALUES (%s, %s, %s, 'draft', %s, %s, %s, %s, %s)
                 RETURNING id, title, format, status, created_at;
                 """,
                 (
@@ -186,6 +191,7 @@ def generate_draft(
                     [str(a) for a in atom_ids],
                     tags,
                     round(avg_conf, 3),
+                    source_hint,
                 ),
             )
             post_row = cur.fetchone()
@@ -208,3 +214,38 @@ def generate_draft(
         "status": "draft",
         "created_at": str(post_row[4]),
     }
+
+
+def _has_recent_draft_for_tags(
+    author_username: str | None,
+    topic_tags: list[str] | None,
+    within_days: int = 7,
+) -> bool:
+    """Return True if the user already has a recent draft or published post covering these tags.
+
+    Prevents N drafts accumulating on the same topic when multiple related atoms
+    are committed in quick succession. A 7-day window balances freshness vs spam.
+    """
+    if not author_username or not topic_tags:
+        return False
+
+    cfg = get_config()
+    try:
+        with psycopg.connect(cfg.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM social_posts sp
+                    JOIN users u ON u.id = sp.author_user_id
+                    WHERE u.username = %s
+                      AND sp.status IN ('draft', 'published')
+                      AND sp.topic_tags && %s
+                      AND sp.created_at >= now() - interval '1 day' * %s;
+                    """,
+                    (author_username, topic_tags, within_days),
+                )
+                row = cur.fetchone()
+                return bool(row and int(row[0]) > 0)
+    except Exception:
+        return False

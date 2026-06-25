@@ -885,14 +885,23 @@ def _post_commit_trigger(atom_id: str, source_user_id: str | None) -> None:
         importance = float(importance or 0.0)
         novelty_score = float(novelty_score or 0.0)
 
-        # 1. Draft generation gate — public atoms above confidence*importance threshold
+        # 1. Draft generation gate — public atoms above threshold OR flagged as novel/high-interest.
+        # interest_flag bypasses the score gate so genuinely novel ideas surface immediately
+        # even before they've accumulated confidence through signal aggregation.
         PUBLISH_THRESHOLD = 0.65
-        if visibility == "public" and (confidence * importance) >= PUBLISH_THRESHOLD:
+        qualifies = visibility == "public" and (
+            (confidence * importance) >= PUBLISH_THRESHOLD or bool(interest_flag)
+        )
+        if qualifies:
             try:
-                from app.article_generator import generate_draft
-                result = generate_draft(atom_ids=[atom_id], author_username=source_user_id or "local_user")
-                if result:
-                    _log.info("post_commit_trigger: draft created %s for atom %s", result.get("id"), atom_id)
+                from app.article_generator import _has_recent_draft_for_tags, generate_draft
+                # Dedup: skip if user already has a recent draft covering the same topic tags.
+                if not _has_recent_draft_for_tags(source_user_id, topic_tags):
+                    result = generate_draft(atom_ids=[atom_id], author_username=source_user_id or "local_user")
+                    if result:
+                        _log.info("post_commit_trigger: draft created %s for atom %s", result.get("id"), atom_id)
+                else:
+                    _log.debug("post_commit_trigger: skipped draft for atom %s — recent draft covers same tags", atom_id)
             except Exception as exc:
                 _log.debug("post_commit_trigger: draft generation failed (non-fatal): %s", exc)
 
@@ -921,18 +930,19 @@ def _post_commit_trigger(atom_id: str, source_user_id: str | None) -> None:
                 if related_ids:
                     with psycopg.connect(db_url) as conn:
                         with conn.cursor() as cur:
-                            for disc_id in related_ids:
-                                cur.execute(
-                                    """
-                                    INSERT INTO user_notifications
-                                        (user_id, discussion_id, new_atom_count, notification_type)
-                                    SELECT u.id, %s::uuid, 0, 'related_discussion'
-                                    FROM users u
-                                    WHERE u.username = %s
-                                    ON CONFLICT DO NOTHING;
-                                    """,
-                                    (disc_id, source_user_id),
-                                )
+                            # Single batch INSERT — avoids N round-trips at scale
+                            cur.execute(
+                                """
+                                INSERT INTO user_notifications
+                                    (user_id, discussion_id, new_atom_count, notification_type)
+                                SELECT u.id, d.id, 0, 'related_discussion'
+                                FROM users u
+                                CROSS JOIN unnest(%s::uuid[]) AS d(id)
+                                WHERE u.username = %s
+                                ON CONFLICT DO NOTHING;
+                                """,
+                                (related_ids, source_user_id),
+                            )
                         conn.commit()
                     _log.info("post_commit_trigger: notified %s of %d related discussion(s)", source_user_id, len(related_ids))
             except Exception as exc:
