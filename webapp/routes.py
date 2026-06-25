@@ -495,7 +495,9 @@ def drafts():
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT sp.id, sp.title, sp.format, sp.confidence_at_publish, sp.created_at
+                    SELECT sp.id, sp.title, sp.format, sp.confidence_at_publish,
+                           sp.created_at, sp.body, sp.source_turn_text,
+                           sp.topic_tags
                     FROM social_posts sp
                     JOIN users u ON u.id = sp.author_user_id
                     WHERE u.username = %s AND sp.status = 'draft'
@@ -510,7 +512,10 @@ def drafts():
                         "title": r[1],
                         "format": r[2],
                         "confidence": round(float(r[3] or 0), 2),
-                        "created_at": r[4].strftime("%Y-%m-%d %H:%M") if r[4] else "—",
+                        "created_at": _ago(r[4]) if r[4] else "—",
+                        "preview": (r[5] or "")[:200],
+                        "source_hint": (r[6] or "")[:120] if r[6] else None,
+                        "topic_tags": r[7] or [],
                     }
                     for r in rows
                 ]
@@ -1489,8 +1494,12 @@ def notifications():
                 for r in cur.fetchall():
                     status = r[3] or "active"
                     notif_type = r[7]
-                    if notif_type == "targeted":
+                    if notif_type == "related_discussion":
+                        message = "Others have been discussing a topic similar to something you've been thinking about."
+                    elif notif_type == "targeted":
                         message = "We think you may have insight into this — you were specifically invited."
+                    elif notif_type == "stalled":
+                        message = "We're still looking for the right people to respond to your question. It may take a little longer."
                     elif notif_type == "published":
                         message = "Your conversation was shared with people who may know more."
                     elif notif_type in ("answered",) or status == "answered":

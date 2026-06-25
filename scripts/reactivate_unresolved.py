@@ -3,9 +3,10 @@
 
 Finds discussions in 'gathering' or 'unresolved' status that have had no
 activity for more than N days. For each:
-  1. Widens routing by lowering the affinity threshold to reach more users.
-  2. Escalates to visibility='public' on linked atoms so any browsing user
-     can contribute.
+  1. Widens routing (more targeted notifications, lower affinity threshold).
+  2. Escalates to visibility='public' on linked atoms.
+  3. After MAX_REACTIVATIONS attempts with no response: marks thread_status='dead'
+     and sends the originating user a humane "still looking" notification.
 
 Safe to run repeatedly (idempotent — ON CONFLICT DO NOTHING on notifications).
 
@@ -25,16 +26,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-import os
 import psycopg
 from app.config import get_config
+
+MAX_REACTIVATIONS = 3  # attempts before marking dead
 
 
 def find_stalled_discussions(conn, days: int) -> list[dict]:
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, title, topic_tags, created_by_user_id
+            SELECT id, title, topic_tags, created_by_user_id, reactivation_count
             FROM discussions
             WHERE thread_status IN ('gathering', 'unresolved')
               AND auto_published = true
@@ -45,19 +47,50 @@ def find_stalled_discussions(conn, days: int) -> list[dict]:
             (days,),
         )
         return [
-            {"id": str(r[0]), "title": r[1], "tags": r[2] or [], "creator": str(r[3]) if r[3] else None}
+            {
+                "id": str(r[0]),
+                "title": r[1],
+                "tags": r[2] or [],
+                "creator": str(r[3]) if r[3] else None,
+                "reactivation_count": int(r[4] or 0),
+            }
             for r in cur.fetchall()
         ]
 
 
+def mark_dead(disc: dict, db_url: str) -> None:
+    """Mark discussion dead and notify the originating user with humane copy."""
+    with psycopg.connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE discussions
+                SET thread_status = 'unresolved', last_activity_at = now()
+                WHERE id = %s;
+                """,
+                (disc["id"],),
+            )
+            # Notify originating user — humane framing, not "your question is dead"
+            if disc["creator"]:
+                cur.execute(
+                    """
+                    INSERT INTO user_notifications
+                        (user_id, discussion_id, new_atom_count, notification_type)
+                    VALUES (%s::uuid, %s::uuid, 0, 'stalled')
+                    ON CONFLICT DO NOTHING;
+                    """,
+                    (disc["creator"], disc["id"]),
+                )
+        conn.commit()
+
+
 def widen_routing(disc: dict, db_url: str, dry_run: bool) -> int:
-    """Notify more users by using a lower affinity threshold.
+    """Notify more users and increment reactivation_count.
 
     Returns the count of new notifications sent.
     """
     from app.topic_affinity import find_users_with_affinity
 
-    # Lower threshold: pass tags directly, limit is wider (50 → 100)
     matched_ids = find_users_with_affinity(
         disc["tags"],
         exclude_user_id=disc["creator"],
@@ -70,8 +103,7 @@ def widen_routing(disc: dict, db_url: str, dry_run: bool) -> int:
     if dry_run:
         return len(matched_ids)
 
-    import psycopg as _pg
-    with _pg.connect(db_url) as conn:
+    with psycopg.connect(db_url) as conn:
         with conn.cursor() as cur:
             sent = 0
             for user_id in matched_ids:
@@ -91,7 +123,8 @@ def widen_routing(disc: dict, db_url: str, dry_run: bool) -> int:
             cur.execute(
                 """
                 UPDATE discussions
-                SET last_activity_at = now()
+                SET last_activity_at = now(),
+                    reactivation_count = reactivation_count + 1
                 WHERE id = %s;
                 """,
                 (disc["id"],),
@@ -105,8 +138,7 @@ def escalate_visibility(disc: dict, db_url: str, dry_run: bool) -> int:
     if dry_run:
         return 0
 
-    import psycopg as _pg
-    with _pg.connect(db_url) as conn:
+    with psycopg.connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -141,11 +173,19 @@ def main() -> None:
 
     total_notified = 0
     for disc in discussions:
+        count = disc["reactivation_count"]
+        if count >= MAX_REACTIVATIONS:
+            action_taken = "marked dead (notified user)" if not dry_run else "would mark dead"
+            if not dry_run:
+                mark_dead(disc, db_url)
+            print(f"  [{disc['id'][:8]}] {disc['title'][:55]} — {action_taken} (retried {count}×)")
+            continue
+
         notified = widen_routing(disc, db_url, dry_run)
         escalate_visibility(disc, db_url, dry_run)
         total_notified += notified
-        action = "would notify" if dry_run else "notified"
-        print(f"  [{disc['id'][:8]}] {disc['title'][:60]} — {action} {notified} users")
+        action = f"would notify (attempt {count+1}/{MAX_REACTIVATIONS})" if dry_run else f"notified (attempt {count+1}/{MAX_REACTIVATIONS})"
+        print(f"  [{disc['id'][:8]}] {disc['title'][:55]} — {action}: {notified} users")
 
     if dry_run:
         print(f"\nWould notify {total_notified} users. Re-run with --commit to send.")

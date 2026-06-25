@@ -214,15 +214,18 @@ def synthesise_discussion(disc_id: str, db_url: str | None = None) -> str | None
                     """,
                     (disc_id,),
                 )
-                # Step 3: advance to 'answered' and store synthesis as summary
+                # Step 3: advance to 'answered', store synthesis as summary,
+                # and refresh the title to better reflect the synthesised answer.
+                new_title = _synthesise_title(disc_title, synthesis_text)
                 cur.execute(
                     """
                     UPDATE discussions
                     SET thread_status = 'answered',
-                        summary = %s
+                        summary = %s,
+                        title = COALESCE(%s, title)
                     WHERE id = %s;
                     """,
-                    (synthesis_text[:2000], disc_id),
+                    (synthesis_text[:2000], new_title, disc_id),
                 )
             conn.commit()
 
@@ -289,6 +292,33 @@ def _generate_synthesis(title: str, atoms: list[tuple]) -> str | None:
         return result.strip() if result else _mechanical_synthesis(labeled)
     except Exception:
         return _mechanical_synthesis(labeled)
+
+
+def _synthesise_title(original_title: str, synthesis_text: str) -> str | None:
+    """Generate a refined title from the synthesis text.
+
+    Returns a new title string if the LLM produces a good one, else None
+    (caller uses COALESCE so original is preserved on failure).
+    """
+    try:
+        from app.llm_provider import get_chat_client
+        llm = get_chat_client()
+        result = llm.generate_response(
+            f"Original question: {original_title}\n\n"
+            f"Synthesised answer: {synthesis_text[:400]}\n\n"
+            "Write a new discussion title (max 90 characters) that captures what this "
+            "conversation is actually about now that answers have arrived. "
+            "Make it a sharp, specific statement or question — not a summary. "
+            "Return only the title text, nothing else.",
+            system="You write precise, informative discussion titles. Never use quotes.",
+        )
+        if result:
+            title = result.strip().strip('"').strip("'")
+            if 10 < len(title) <= 100:
+                return title
+    except Exception:
+        pass
+    return None
 
 
 def _mechanical_synthesis(labeled: list[str]) -> str:

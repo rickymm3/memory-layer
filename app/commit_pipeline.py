@@ -831,4 +831,112 @@ class MemoryCommitPipeline:
             except Exception:
                 pass  # discussion status advancement is non-fatal
 
+        # ── Post-write trigger (background, non-blocking) ────────────────────
+        # When a new atom is committed, check two things:
+        # 1. Does it qualify for draft generation (public + confidence*importance threshold)?
+        # 2. Are there related discussions the originating user should know about?
+        # Both run async so the commit pipeline itself never slows down.
+        if final_decision in ("commit", "refine_existing") and committed_atom_id:
+            try:
+                import threading as _threading
+                _threading.Thread(
+                    target=_post_commit_trigger,
+                    args=(committed_atom_id, source_user_id),
+                    daemon=True,
+                ).start()
+            except Exception:
+                pass  # post-commit trigger failure is never fatal
+
         return decision_obj
+
+
+def _post_commit_trigger(atom_id: str, source_user_id: str | None) -> None:
+    """Background trigger: check if a newly committed atom warrants a draft or related-discussion alert.
+
+    Runs in a daemon thread — any exception is swallowed so it never affects the pipeline.
+    """
+    import logging
+    import os
+    _log = logging.getLogger(__name__)
+    try:
+        import psycopg
+        db_url = os.environ.get("DATABASE_URL", "")
+        if not db_url:
+            return
+
+        with psycopg.connect(db_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT content, memory_type, scope, visibility,
+                           confidence, importance, topic_tags, interest_flag, novelty_score
+                    FROM memory_atoms
+                    WHERE id = %s AND lifecycle_status = 'active';
+                    """,
+                    (atom_id,),
+                )
+                row = cur.fetchone()
+
+        if not row:
+            return
+
+        content, mtype, scope, visibility, confidence, importance, topic_tags, interest_flag, novelty_score = row
+        confidence = float(confidence or 0.0)
+        importance = float(importance or 0.0)
+        novelty_score = float(novelty_score or 0.0)
+
+        # 1. Draft generation gate — public atoms above confidence*importance threshold
+        PUBLISH_THRESHOLD = 0.65
+        if visibility == "public" and (confidence * importance) >= PUBLISH_THRESHOLD:
+            try:
+                from app.article_generator import generate_draft
+                result = generate_draft(atom_ids=[atom_id], author_username=source_user_id or "local_user")
+                if result:
+                    _log.info("post_commit_trigger: draft created %s for atom %s", result.get("id"), atom_id)
+            except Exception as exc:
+                _log.debug("post_commit_trigger: draft generation failed (non-fatal): %s", exc)
+
+        # 2. Related-discussion alert — notify originating user if others have discussed this topic
+        if source_user_id and topic_tags:
+            try:
+                with psycopg.connect(db_url) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT d.id
+                            FROM discussions d
+                            WHERE d.auto_published = true
+                              AND d.thread_status NOT IN ('unresolved', 'dead')
+                              AND d.topic_tags && %s
+                              AND d.created_by_user_id != (
+                                  SELECT id FROM users WHERE username = %s
+                              )
+                            ORDER BY d.last_activity_at DESC
+                            LIMIT 3;
+                            """,
+                            (topic_tags, source_user_id),
+                        )
+                        related_ids = [str(r[0]) for r in cur.fetchall()]
+
+                if related_ids:
+                    with psycopg.connect(db_url) as conn:
+                        with conn.cursor() as cur:
+                            for disc_id in related_ids:
+                                cur.execute(
+                                    """
+                                    INSERT INTO user_notifications
+                                        (user_id, discussion_id, new_atom_count, notification_type)
+                                    SELECT u.id, %s::uuid, 0, 'related_discussion'
+                                    FROM users u
+                                    WHERE u.username = %s
+                                    ON CONFLICT DO NOTHING;
+                                    """,
+                                    (disc_id, source_user_id),
+                                )
+                        conn.commit()
+                    _log.info("post_commit_trigger: notified %s of %d related discussion(s)", source_user_id, len(related_ids))
+            except Exception as exc:
+                _log.debug("post_commit_trigger: related-discussion alert failed (non-fatal): %s", exc)
+
+    except Exception as exc:
+        _log.debug("post_commit_trigger: outer failure (non-fatal): %s", exc)

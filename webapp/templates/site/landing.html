@@ -19,6 +19,15 @@
     </div>
     {% endif %}
 
+    {% if current_user.is_authenticated %}
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:1rem 1.25rem;margin-bottom:1.25rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+      <div style="font-size:.88rem;color:var(--muted)">
+        Continue your conversation — your AI remembers everything you've discussed.
+      </div>
+      <a href="{{ url_for('webapp.chat') }}" class="btn btn-primary btn-sm" style="white-space:nowrap">Open chat →</a>
+    </div>
+    {% endif %}
+
     {% if current_user.is_authenticated and new_since_visit %}
     <div style="margin-bottom:1.5rem">
       <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--accent);margin-bottom:.75rem">
