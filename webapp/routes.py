@@ -1489,7 +1489,9 @@ def notifications():
                 for r in cur.fetchall():
                     status = r[3] or "active"
                     notif_type = r[7]
-                    if notif_type == "published":
+                    if notif_type == "targeted":
+                        message = "We think you may have insight into this — you were specifically invited."
+                    elif notif_type == "published":
                         message = "Your conversation was shared with people who may know more."
                     elif notif_type in ("answered",) or status == "answered":
                         message = "Your conversation has a new answer."

@@ -153,7 +153,9 @@ def publish_to_feed(
                     if row:
                         user_uuid = row[0]
 
-                # Create the discussion
+                # Create the discussion.
+                # atom_count may be 0 when routing an unanswered question directly —
+                # the question itself seeds the discussion without committed atoms.
                 cur.execute(
                     """
                     INSERT INTO discussions
@@ -166,7 +168,7 @@ def publish_to_feed(
                     (
                         title,
                         tags,
-                        committed_atom_ids,
+                        committed_atom_ids,  # empty list is valid
                         len(committed_atom_ids),
                         summary,
                         user_uuid,
@@ -239,11 +241,13 @@ def _notify_matched_users(
             with conn.cursor() as cur:
                 for user_id in matched_ids:
                     try:
+                        # 'targeted' tells the user they were specifically chosen
+                        # because their memory corpus matches this discussion's topic.
                         cur.execute(
                             """
                             INSERT INTO user_notifications
                                 (user_id, discussion_id, new_atom_count, notification_type)
-                            VALUES (%s::uuid, %s::uuid, 0, 'published')
+                            VALUES (%s::uuid, %s::uuid, 0, 'targeted')
                             ON CONFLICT DO NOTHING;
                             """,
                             (user_id, disc_id),

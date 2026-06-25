@@ -112,14 +112,16 @@ def synthesise_discussion(disc_id: str, db_url: str | None = None) -> str | None
         if not synthesis_text:
             return None
 
-        # Commit synthesis through the full pipeline
+        # Commit synthesis through the full pipeline.
+        # Scope is synapse:validated so ALL users benefit — not just the creator.
+        # visibility='public' ensures the atom appears in shared retrieval.
         from app.commit_pipeline import MemoryCommitPipeline
         pipeline = MemoryCommitPipeline()
         candidate = {
             "content": synthesis_text,
             "memory_type": "fact",
-            "scope": f"user" if not creator_username else f"user:{creator_username}",
-            "importance": 0.75,
+            "scope": "synapse:validated",
+            "importance": 0.80,
             "should_store": True,
         }
         decision = pipeline.commit_candidate(
@@ -132,19 +134,45 @@ def synthesise_discussion(disc_id: str, db_url: str | None = None) -> str | None
         if not atom_id:
             return None
 
-        # Propagate discussion topic_tags to the synthesis atom so topic_matcher
-        # and affinity ranking can work from the atom directly.
-        if disc_topic_tags:
-            try:
-                with psycopg.connect(db_url) as _tc:
-                    with _tc.cursor() as _cur:
-                        _cur.execute(
-                            "UPDATE memory_atoms SET topic_tags = %s WHERE id = %s;",
-                            (disc_topic_tags, atom_id),
-                        )
-                    _tc.commit()
-            except Exception:
-                pass  # non-fatal — atom is still valid without tags
+        # Force public visibility and propagate topic_tags.
+        # The critic may default to private; override so the synthesis propagates.
+        try:
+            with psycopg.connect(db_url) as _tc:
+                with _tc.cursor() as _cur:
+                    _cur.execute(
+                        """
+                        UPDATE memory_atoms
+                        SET visibility = 'public',
+                            topic_tags  = COALESCE(%s, topic_tags)
+                        WHERE id = %s;
+                        """,
+                        (disc_topic_tags or None, atom_id),
+                    )
+                _tc.commit()
+        except Exception:
+            pass  # non-fatal — atom is still valid without these overrides
+
+        # Re-scope discussion-response atoms from discussion:{disc_id} → synapse:validated
+        # so their content also feeds future retrievals across all users.
+        try:
+            with psycopg.connect(db_url) as _tc:
+                with _tc.cursor() as _cur:
+                    _cur.execute(
+                        """
+                        UPDATE memory_atoms ma
+                        SET scope = 'synapse:validated',
+                            visibility = 'public'
+                        FROM discussion_atoms da
+                        WHERE da.discussion_id = %s
+                          AND da.atom_id = ma.id
+                          AND ma.scope LIKE 'discussion:%'
+                          AND ma.lifecycle_status = 'active';
+                        """,
+                        (disc_id,),
+                    )
+                _tc.commit()
+        except Exception:
+            pass  # non-fatal — individual atom re-scoping
 
         # Link synthesis atom to discussion.
         # Status progression per spec:

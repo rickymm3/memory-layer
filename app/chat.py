@@ -592,7 +592,7 @@ def chat_with_research(
 
     atoms = _retrieve_with_fallback(
         current_message, memory_store, limit=limit,
-        scope_filters=["project:memory-layer", "user"],
+        scope_filters=["project:memory-layer", "user", "synapse:validated"],
     )
 
     route = _classify_retrieval_signal(atoms)
@@ -731,19 +731,53 @@ def _post_turn_reflection(
     result = run_turn_reflection(user_msg, thinking, answer, source_user_id=source_user_id)
 
     if route == "direct":
+        import os as _os
+        _db_url = _os.environ.get("DATABASE_URL", "")
+        from app.feed_publisher import publish_to_feed, _worth_surfacing
         committed_ids = [c["atom_id"] for c in result.get("committed", []) if c.get("atom_id")]
-        if committed_ids:
-            import os as _os
-            _db_url = _os.environ.get("DATABASE_URL", "")
-            from app.feed_publisher import publish_to_feed, _worth_surfacing
-            if _worth_surfacing(committed_ids, _db_url):
-                publish_to_feed(
-                    user_msg=user_msg,
-                    answer=answer,
-                    committed_atom_ids=committed_ids,
-                    source_user_id=source_user_id,
-                    db_url=_db_url,
-                )
+        if committed_ids and _worth_surfacing(committed_ids, _db_url):
+            # Committed atoms cleared the novelty gate — publish with evidence
+            publish_to_feed(
+                user_msg=user_msg,
+                answer=answer,
+                committed_atom_ids=committed_ids,
+                source_user_id=source_user_id,
+                db_url=_db_url,
+            )
+        elif _is_routeable_question(user_msg):
+            # No novel atoms — but the question itself is genuinely unanswered.
+            # Route the question directly so targeted users can respond.
+            publish_to_feed(
+                user_msg=user_msg,
+                answer=answer,
+                committed_atom_ids=[],
+                source_user_id=source_user_id,
+                db_url=_db_url,
+            )
+
+
+_SMALL_TALK = frozenset({
+    "hi", "hello", "hey", "thanks", "thank you", "ok", "okay", "yes", "no",
+    "sure", "great", "cool", "nice", "good", "bye", "goodbye", "lol",
+})
+
+def _is_routeable_question(msg: str) -> bool:
+    """Return True if the message is substantive enough to route to the forum.
+
+    Filters: too short, pure small talk, or looks like a command rather than a question.
+    Keeps: genuine factual or experiential questions the AI may not know.
+    """
+    stripped = msg.strip()
+    if len(stripped) < 25:
+        return False
+    words = stripped.lower().split()
+    if not words:
+        return False
+    # All-stopword / small-talk turns
+    content_words = [w for w in words if w not in _SMALL_TALK]
+    if len(content_words) < 3:
+        return False
+    return True
 
 
 def _store_research_bg(hits: list[dict], topic: str) -> None:

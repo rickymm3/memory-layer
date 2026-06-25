@@ -8,7 +8,7 @@ MCP_HOST ?= 0.0.0.0
 MCP_PORT ?= 8765
 COMFYUI_DIR ?= $(HOME)/ComfyUI
 
-.PHONY: doctor store retrieve chat session extract-store list list-signals list-task-runs model-report observe verify test test-chat-parity test-web-research test-task-readiness test-commit-pipeline test-context-evaluator test-response-evaluator test-post-turn-reflection assess-task mcp mcp-serve review-proposals recompute-weights recompute-all update delete dashboard comfyui reflect normalize-scope purge-stale users install-vscode-prompts
+.PHONY: doctor store retrieve chat session extract-store list list-signals list-task-runs model-report observe verify test test-chat-parity test-web-research test-task-readiness test-commit-pipeline test-context-evaluator test-response-evaluator test-post-turn-reflection assess-task mcp mcp-serve review-proposals recompute-weights recompute-all update delete dashboard comfyui reflect normalize-scope purge-stale users install-vscode-prompts reactivate
 
 test:
 	$(PYTHON) -m pytest tests/ -v
@@ -132,6 +132,9 @@ normalize-scope:
 
 purge-stale:
 	$(PYTHON) scripts/purge_stale_atoms.py $(ARGS)
+
+reactivate:
+	$(PYTHON) scripts/reactivate_unresolved.py $(ARGS)
 
 users:
 	$(PYTHON) scripts/manage_users.py $(ARGS)
