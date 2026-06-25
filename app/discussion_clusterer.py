@@ -106,7 +106,13 @@ def _find_matching_discussion(conn, store, embedding, exclude_ids: set[str]) -> 
             )
             discussions = cur.fetchall()
 
-    emb_str = embedding if isinstance(embedding, str) else store._vector_literal(embedding)
+    import json as _json
+    if isinstance(embedding, (list, tuple)):
+        emb_param = embedding
+    elif isinstance(embedding, str):
+        emb_param = _json.loads(embedding)
+    else:
+        emb_param = embedding
     best_id = None
     best_sim = 0.0
 
@@ -115,14 +121,14 @@ def _find_matching_discussion(conn, store, embedding, exclude_ids: set[str]) -> 
             continue
         with conn.cursor() as cur:
             cur.execute(
-                f"""
-                SELECT 1 - (embedding <=> '{emb_str}'::vector) AS sim
+                """
+                SELECT 1 - (embedding <=> %s::vector) AS sim
                 FROM memory_atoms
                 WHERE id = ANY(%s) AND embedding IS NOT NULL
                 ORDER BY sim DESC
                 LIMIT 1;
                 """,
-                (seed_ids,),
+                (_json.dumps(emb_param), seed_ids),
             )
             row = cur.fetchone()
         if row and float(row[0]) > best_sim:
