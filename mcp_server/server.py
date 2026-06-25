@@ -36,6 +36,7 @@ from mcp_server.tools.stale_atoms import get_stale_atoms
 from mcp_server.tools.find_duplicates import find_duplicate_atoms
 from mcp_server.tools.link_atoms import link_atoms
 from mcp_server.tools.related_atoms import get_related_atoms
+from mcp_server.tools.push_conversation import push_conversation_tool
 
 _WRITE_PROTOCOL = """After any turn where the user expressed a preference, correction, decision, or instruction:
 1. Call memory_store_auto BEFORE finishing your response — not at end-of-session.
@@ -296,6 +297,35 @@ def memory_related(
         atom_id=atom_id,
         depth=depth,
         relation_types=relation_types,
+    )
+
+
+@mcp.tool()
+def memory_push_conversation(
+    transcript: str,
+    is_jsonl_path: bool = False,
+) -> dict[str, Any]:
+    """Push an entire conversation into memory atoms.
+
+    Processes all user→assistant turns in the transcript, extracts durable
+    memory atoms from each substantive exchange, and commits them through the
+    full write pipeline (reconciler + critic + risk gate).
+
+    Post drafts are generated automatically in the background — check /drafts
+    on the Synapse site for "Based on your conversation, here's a suggested post."
+
+    Args:
+        transcript: The conversation text. Either plain text with 'User:' /
+            'Assistant:' role markers, or a path to a Claude Code .jsonl file
+            when is_jsonl_path=True.
+        is_jsonl_path: Set True when transcript is a filesystem path to a
+            Claude Code session .jsonl file (e.g. ~/.claude/projects/.../*.jsonl).
+    """
+    from mcp_server.auth_context import current_user_id
+    return push_conversation_tool(
+        transcript=transcript,
+        source_user_id=current_user_id(),
+        is_jsonl_path=is_jsonl_path,
     )
 
 

@@ -128,6 +128,18 @@ const TOOLS = [
       required: ['atom_id'],
     },
   },
+  {
+    name: 'memory_push_conversation',
+    description: 'Push an entire conversation into memory atoms. Post drafts are generated automatically — check /drafts for suggested posts.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        transcript:    { type: 'string',  description: 'Conversation text with User:/Assistant: markers, or a .jsonl file path.' },
+        is_jsonl_path: { type: 'boolean', description: 'Set true if transcript is a path to a Claude Code session .jsonl file.' },
+      },
+      required: ['transcript'],
+    },
+  },
 ];
 
 // ── HTTP call to Synapse site ─────────────────────────────────────────────────
@@ -188,6 +200,17 @@ async function handle(msg) {
         protocolVersion: '2024-11-05',
         capabilities: { tools: {} },
         serverInfo: { name: 'memoryLayer', version: '0.1.0' },
+        instructions: [
+          'MANDATORY PER-TURN WRITE RULE: After any turn where the user expresses a',
+          'preference, correction, decision, or instruction — call memory_store_auto',
+          'BEFORE finishing your response. Do not defer to end-of-session.',
+          'Scope rules: project facts → scope="project:<name>",',
+          'observations about your own behavior → scope="model:claude-sonnet-4-6",',
+          'user preferences → scope="user".',
+          'Report both memory_atom_id and memory_signal_id for every write.',
+          'Triggers: preferences with reasons, architecture decisions, corrections,',
+          'frustration or satisfaction signals, facts you would otherwise forget.',
+        ].join(' '),
       },
     });
     return;

@@ -757,12 +757,19 @@ def mcp_sse():
     tool = body.get("tool", "")
     args = body.get("args", {})
 
+    import logging as _logging
+    _mcp_log = _logging.getLogger("mcp_sse")
+    _mcp_log.info("mcp_sse tool=%s user=%s", tool, username)
+
     try:
         result = _dispatch_mcp_tool(tool, args, username)
+        _mcp_log.info("mcp_sse tool=%s user=%s status=ok", tool, username)
         return jsonify({"result": result})
     except ValueError as exc:
+        _mcp_log.warning("mcp_sse tool=%s user=%s status=error err=%s", tool, username, exc)
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
+        _mcp_log.warning("mcp_sse tool=%s user=%s status=error err=%s", tool, username, exc)
         return jsonify({"error": str(exc)}), 500
 
 
@@ -836,6 +843,14 @@ def _dispatch_mcp_tool(tool: str, args: dict, username: str):
             atom_id=args.get("atom_id", ""),
             depth=int(args.get("depth", 1)),
             relation_types=args.get("relation_types"),
+        )
+
+    if tool == "memory_push_conversation":
+        from mcp_server.tools.push_conversation import push_conversation_tool
+        return push_conversation_tool(
+            transcript=args.get("transcript", ""),
+            source_user_id=username,
+            is_jsonl_path=bool(args.get("is_jsonl_path", False)),
         )
 
     raise ValueError(f"Unknown tool: {tool}")
