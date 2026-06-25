@@ -889,6 +889,16 @@ def api_ingest():
     if visibility not in ("public", "private", "team"):
         visibility = "public"
 
+    # ── Deterministic guardrail (credentials / secrets) ──
+    from app.write_quality import score_write_quality
+    quality = score_write_quality(content, memory_type=memory_type, scope=scope)
+    if quality.decision == "reject":
+        return jsonify({
+            "stored": False,
+            "decision": "rejected",
+            "reason": "; ".join(quality.signals),
+        }), 400
+
     # ── Commit pipeline ──
     try:
         from app.commit_pipeline import MemoryCommitPipeline
