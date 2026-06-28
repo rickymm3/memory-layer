@@ -1,0 +1,49 @@
+{% extends "site/base.html" %}
+{% block title %}Privacy Policy — Synapse{% endblock %}
+
+{% block content %}
+<div style="max-width:680px;margin:0 auto">
+  <div class="page-header">
+    <h1>Privacy Policy</h1>
+    <p style="color:var(--muted);font-size:.88rem">Last updated: June 2026</p>
+  </div>
+
+  <div class="post-body">
+
+    <h2>What we collect</h2>
+    <p>When you use Synapse and its AI memory system, we store:</p>
+    <ul>
+      <li><strong>Memory atoms</strong> — short, structured summaries of facts, decisions, and preferences you share with your AI. Each atom includes the text content, a confidence score, a scope label, and a vector embedding used for semantic search.</li>
+      <li><strong>Posts and perspectives</strong> — content you publish on Synapse, including titles, body text, topic tags, and community responses.</li>
+      <li><strong>Account information</strong> — your username, email address, and an API token for connecting Claude to your memory layer.</li>
+      <li><strong>Usage signals</strong> — reinforcement and opposition signals attached to your memory atoms, used to track how your beliefs evolve over time.</li>
+    </ul>
+
+    <h2>How we use it</h2>
+    <p>Your data is used exclusively to power your personal AI memory experience:</p>
+    <ul>
+      <li>Memory atoms are retrieved at the start of AI sessions to give Claude relevant context from past conversations.</li>
+      <li>Public atoms (those you choose to make visible) contribute to cross-user consensus synthesis — a summary of what the community collectively believes about a topic.</li>
+      <li>Private atoms (the default) are visible only to you and your connected AI.</li>
+    </ul>
+    <p>We do not use your data to train AI models, and we do not sell or share your data with third parties.</p>
+
+    <h2>Who can see your data</h2>
+    <ul>
+      <li><strong>Private atoms</strong> — visible only to you and AI sessions authenticated with your API token.</li>
+      <li><strong>Public atoms</strong> — included in anonymous cross-user similarity matching for consensus synthesis. The atom content itself is not displayed to other users directly.</li>
+      <li><strong>Published posts</strong> — visible to all Synapse users and, if the site is public-facing, to anyone on the internet.</li>
+    </ul>
+
+    <h2>Data retention</h2>
+    <p>Memory atoms are retained indefinitely until you delete them. You can delete individual atoms from your Brain dashboard. Published posts can be discarded from the post detail page while in draft status; published posts can be removed by contacting us.</p>
+
+    <h2>How to delete your data</h2>
+    <p>To delete your account and all associated data, contact us at the email below. We will remove all atoms, posts, and account information within 30 days.</p>
+
+    <h2>Contact</h2>
+    <p>For privacy questions or deletion requests: <a href="mailto:rickymm3@gmail.com">rickymm3@gmail.com</a></p>
+
+  </div>
+</div>
+{% endblock %}

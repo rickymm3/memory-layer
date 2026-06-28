@@ -89,6 +89,10 @@
 
   <div class="config-block">
     <h3>Claude Desktop <code>claude_desktop_config.json</code></h3>
+    <p style="font-size:.83rem;color:var(--pico-muted-color);margin-bottom:.6rem">
+      Config file location: <code>~/Library/Application Support/Claude/</code> (Mac) &nbsp;·&nbsp;
+      <code>%APPDATA%\Claude\</code> (Windows)
+    </p>
     <pre><code>{
   "mcpServers": {
     "memoryLayer": {
@@ -101,6 +105,34 @@
     }
   }
 }</code></pre>
+
+    <details style="margin-top:.75rem">
+      <summary style="font-size:.83rem;font-weight:600;cursor:pointer;color:var(--pico-muted-color)">
+        Windows + WSL (if you get <code>spawn npx ENOENT</code>)
+      </summary>
+      <div style="margin-top:.6rem;font-size:.83rem;color:var(--pico-muted-color);margin-bottom:.5rem">
+        Claude Desktop on Windows doesn't inherit your WSL Node/npx. Use <code>wsl.exe</code>
+        (always available in Windows PATH) to run npx from inside WSL instead.
+        <code>WSLENV</code> forwards the token and URL into the Linux environment.
+      </div>
+      <pre><code>{
+  "mcpServers": {
+    "memoryLayer": {
+      "command": "wsl",
+      "args": ["-e", "bash", "-lc", "npx -y memory-layer"],
+      "env": {
+        "MEMORY_LAYER_TOKEN": "{{ current_user.api_token }}",
+        "MEMORY_LAYER_URL": "{{ request.host_url }}mcp/sse",
+        "WSLENV": "MEMORY_LAYER_TOKEN/u:MEMORY_LAYER_URL/u"
+      }
+    }
+  }
+}</code></pre>
+      <p style="font-size:.8rem;color:var(--pico-muted-color);margin-top:.4rem">
+        Verify the server is reachable first:
+        run <code>curl http://localhost:5000/</code> in your WSL terminal.
+      </p>
+    </details>
   </div>
 
   <div class="config-block">
@@ -122,6 +154,90 @@
   </div>
 </section>
 
+<!-- Claude Code Skills -->
+<section class="card" style="margin-top:1.5rem">
+  <h2 style="font-size:1.1rem;margin-bottom:.5rem">Claude Code skills</h2>
+  <p style="font-size:.88rem;color:var(--pico-muted-color);margin-bottom:1.5rem">
+    Skills extend Claude Code with Synapse-aware slash commands. Save each file to
+    <code>.claude/skills/&lt;name&gt;/SKILL.md</code> in your project (or globally at
+    <code>~/.claude/skills/&lt;name&gt;/SKILL.md</code>), then use the command in any session.
+  </p>
+
+  <div class="config-block">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem">
+      <h3 style="margin:0"><code>/synapse:push</code> — push a conversation to memory</h3>
+      <button class="copy-btn" onclick="copySkill('push-skill')">Copy</button>
+    </div>
+    <p style="font-size:.83rem;color:var(--pico-muted-color);margin-bottom:.5rem">
+      Extracts memory atoms from the current or a past session and queues post drafts.
+      Save to <code>.claude/skills/push/SKILL.md</code>.
+    </p>
+    <textarea id="push-skill" readonly
+              style="width:100%;height:220px;font-family:monospace;font-size:.78rem;
+                     background:var(--pico-muted-background);border:1px solid var(--pico-muted-border-color);
+                     border-radius:.4rem;padding:.75rem;resize:vertical;color:inherit">---
+description: Push a conversation into Synapse memory and generate post drafts. Use when the user says "push this conversation", "save this session to memory", "push to Synapse", or wants to extract memory atoms from a past or current session.
+---
+
+# Push Conversation to Synapse
+
+Extract memory atoms and queue post drafts from a conversation session.
+
+## If $ARGUMENTS contains a file path:
+Call `memory_push_conversation` with:
+- `transcript` = the path from $ARGUMENTS
+- `is_jsonl_path` = true
+
+## If $ARGUMENTS is empty or says "this session":
+1. Tell the user their current session JSONL is at:
+   `~/.claude/projects/&lt;project-slug&gt;/&lt;session-id&gt;.jsonl`
+   where session-id is available as `$CLAUDE_SESSION_ID` and project-slug is the
+   current directory path with slashes replaced by hyphens.
+2. Offer to push the current session by constructing the path and calling
+   `memory_push_conversation` with `is_jsonl_path` = true.
+
+## If $ARGUMENTS is raw conversation text:
+Call `memory_push_conversation` with:
+- `transcript` = the text from $ARGUMENTS
+- `is_jsonl_path` = false
+
+## After the call:
+Report how many atoms were committed. Tell the user that generated post drafts
+are now available at /drafts on their Synapse site. If the result reports 0 atoms,
+explain that the conversation may have been mostly small talk or already captured.</textarea>
+  </div>
+
+  <div class="config-block" style="margin-top:1.25rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem">
+      <h3 style="margin:0"><code>/synapse:recall</code> — search past memory</h3>
+      <button class="copy-btn" onclick="copySkill('recall-skill')">Copy</button>
+    </div>
+    <p style="font-size:.83rem;color:var(--pico-muted-color);margin-bottom:.5rem">
+      Searches your memory atoms for past decisions, preferences, and context.
+      Save to <code>.claude/skills/recall/SKILL.md</code>.
+    </p>
+    <textarea id="recall-skill" readonly
+              style="width:100%;height:160px;font-family:monospace;font-size:.78rem;
+                     background:var(--pico-muted-background);border:1px solid var(--pico-muted-border-color);
+                     border-radius:.4rem;padding:.75rem;resize:vertical;color:inherit">---
+description: Search your Synapse memory for past decisions, preferences, and context. Use when the user asks "what did we decide about X", "do you remember Y", references something from a prior conversation, or when relevant past context would help answer a question.
+---
+
+# Recall from Synapse Memory
+
+Search Synapse for atoms matching the topic in $ARGUMENTS.
+
+Steps:
+1. Call `memory_search` with `query="$ARGUMENTS"` and `limit=8`
+2. Present results as a clear list — for each atom show: content, type, and confidence score
+3. Group results by topic if multiple clusters are visible
+4. If confidence on any atom is below 0.5, flag it as uncertain
+
+If $ARGUMENTS is empty, ask what the user wants to recall before searching.
+If no results are found, say so directly — do not guess or fabricate context.</textarea>
+  </div>
+</section>
+
 <!-- Account info -->
 <section class="card" style="margin-top:1.5rem">
   <h2 style="font-size:1.1rem;margin-bottom:1rem">Account</h2>
@@ -135,6 +251,16 @@
 <script>
 function copyToken() {
   const val = document.getElementById("token-display").textContent.trim();
+  navigator.clipboard.writeText(val).then(() => {
+    const btn = event.target;
+    btn.textContent = "Copied!";
+    setTimeout(() => btn.textContent = "Copy", 1500);
+  });
+}
+function copySkill(id) {
+  const el = document.getElementById(id);
+  // Replace HTML entities in the textarea value before copying
+  const val = el.value.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
   navigator.clipboard.writeText(val).then(() => {
     const btn = event.target;
     btn.textContent = "Copied!";

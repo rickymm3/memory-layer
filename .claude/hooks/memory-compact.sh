@@ -7,6 +7,13 @@
 INPUT=$(cat)
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 
+# Delete session marker so the first UserPromptSubmit after compaction
+# re-fires memory_task_context_inject.py and loads fresh context.
+SESSION_ID=$(echo "$INPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('session_id') or '')" 2>/dev/null)
+if [ -n "$SESSION_ID" ]; then
+    rm -f "$HOME/.claude/memory-sessions/${SESSION_ID}.initialized"
+fi
+
 if [ -f "$PROJECT_DIR/.env" ]; then
     set -a
     source "$PROJECT_DIR/.env"

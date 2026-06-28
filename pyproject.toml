@@ -19,7 +19,7 @@ postgres  = ["psycopg[binary]>=3.1"]
 openai    = ["openai>=1.50.0"]
 anthropic = ["anthropic>=0.40.0"]
 dashboard = ["flask>=3.0.0"]
-site = ["flask>=3.0.0", "flask-login>=0.6.3", "gunicorn>=22.0.0"]
+site = ["flask>=3.0.0", "flask-login>=0.6.3", "gunicorn>=22.0.0", "markdown>=3.6"]
 dev = [
     "psycopg[binary]>=3.1",
     "flask>=3.0.0",

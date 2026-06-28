@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from urllib.parse import quote as _urlquote
 
 import psycopg
 from flask import (
@@ -43,98 +44,152 @@ def _ago(dt) -> str:
 
 # ── Public routes ─────────────────────────────────────────────────────────────
 
+_CATEGORIES = {
+    "sci-tech": {
+        "label": "Sci / Tech",
+        "keywords": {"technology","science","ai","software","health","space","climate","data",
+                     "programming","engineering","medicine","biology","physics","computing",
+                     "machine learning","robotics","crypto","cybersecurity","startup"},
+    },
+    "entertainment": {
+        "label": "Entertainment",
+        "keywords": {"music","film","movies","tv","gaming","games","art","comedy","celebrity",
+                     "streaming","books","literature","theater","fashion","design","anime",
+                     "podcast","photography","creative"},
+    },
+    "news": {
+        "label": "News",
+        "keywords": {"politics","world","government","policy","election","law","crime",
+                     "economy","finance","business","market","war","international",
+                     "current events","society","environment","education"},
+    },
+    "sports": {
+        "label": "Sports",
+        "keywords": {"sports","football","basketball","baseball","soccer","tennis","golf",
+                     "hockey","olympics","fitness","athletics","racing","esports","cycling"},
+    },
+}
+
+def _categorize_post(topic_tags: list[str]) -> str:
+    """Return best-matching category key for a post's topic_tags, or 'other'."""
+    tags_lower = {t.lower() for t in topic_tags}
+    best, best_score = "other", 0
+    for key, cat in _CATEGORIES.items():
+        score = len(tags_lower & cat["keywords"])
+        if score > best_score:
+            best, best_score = key, score
+    return best
+
+
 @site_bp.route("/")
 def landing():
-    recent = []
-    novel = []
-    new_since_visit: list[dict] = []
+    _VALID_SORTS = ("for_you", "new", "popular", "rising")
+    sort = request.args.get("sort", "for_you" if current_user.is_authenticated else "new").strip()
+    if sort not in _VALID_SORTS:
+        sort = "for_you" if current_user.is_authenticated else "new"
+    category = request.args.get("category", "").strip()
+    if category not in _CATEGORIES:
+        category = ""
+
+    draft_posts = []
     last_seen_at = None
     user_atom_count = 0
+
     try:
         with _conn() as conn:
             with conn.cursor() as cur:
-                # For logged-in users: surface discussions with new activity since last visit
                 if current_user.is_authenticated:
-                    cur.execute(
-                        "SELECT last_seen_at FROM users WHERE username = %s;",
-                        (current_user.username,),
-                    )
+                    cur.execute("SELECT last_seen_at FROM users WHERE username = %s;",
+                                (current_user.username,))
                     row = cur.fetchone()
                     last_seen_at = row[0] if row else None
-
-                    # Count own atoms to differentiate new vs returning users in UI
                     cur.execute(
-                        """
-                        SELECT COUNT(*) FROM memory_atoms ma
-                        JOIN memory_signals ms ON ms.memory_atom_id = ma.id
-                        WHERE ms.source_user_id = %s AND ma.lifecycle_status = 'active'
-                        LIMIT 1;
-                        """,
+                        "SELECT COUNT(*) FROM memory_atoms ma JOIN memory_signals ms ON ms.memory_atom_id = ma.id WHERE ms.source_user_id = %s AND ma.lifecycle_status = 'active';",
                         (current_user.username,),
                     )
                     cnt_row = cur.fetchone()
                     user_atom_count = int(cnt_row[0]) if cnt_row else 0
-                    if last_seen_at:
-                        cur.execute(
-                            """
-                            SELECT id, title, topic_tags, contributor_count,
-                                   atom_count, novelty_flag, last_activity_at, thread_status
-                            FROM discussions
-                            WHERE last_activity_at > %s
-                            ORDER BY last_activity_at DESC
-                            LIMIT 10;
-                            """,
-                            (last_seen_at,),
-                        )
-                        for r in cur.fetchall():
-                            new_since_visit.append({
-                                "id": str(r[0]), "title": r[1], "topic_tags": r[2] or [],
-                                "contributor_count": r[3], "atom_count": r[4],
-                                "novelty_flag": r[5],
-                                "last_activity": _ago(r[6]),
-                                "thread_status": r[7] or "active",
-                            })
-                    # Update last_seen_at on every home page visit
-                    cur.execute(
-                        "UPDATE users SET last_seen_at = now() WHERE username = %s;",
-                        (current_user.username,),
-                    )
+                    cur.execute("UPDATE users SET last_seen_at = now() WHERE username = %s;",
+                                (current_user.username,))
                     conn.commit()
-                cur.execute(
-                    """
-                    SELECT id, title, topic_tags, contributor_count, atom_count,
-                           novelty_flag, last_activity_at, thread_status
-                    FROM discussions
-                    ORDER BY last_activity_at DESC
-                    LIMIT 20;
-                    """
-                )
-                for r in cur.fetchall():
-                    recent.append({
-                        "id": str(r[0]), "title": r[1], "topic_tags": r[2] or [],
-                        "contributor_count": r[3], "atom_count": r[4],
-                        "novelty_flag": r[5],
-                        "last_activity": _ago(r[6]),
-                        "thread_status": r[7] or "active",
-                    })
-                cur.execute(
-                    """
-                    SELECT id, title, topic_tags, contributor_count, atom_count, last_activity_at
-                    FROM discussions WHERE novelty_flag = true
-                    ORDER BY last_activity_at DESC LIMIT 5;
-                    """
-                )
-                for r in cur.fetchall():
-                    novel.append({
-                        "id": str(r[0]), "title": r[1], "topic_tags": r[2] or [],
-                        "contributor_count": r[3], "atom_count": r[4],
-                        "last_activity": _ago(r[5]),
-                    })
     except Exception:
         pass
-    return render_template("site/landing.html", recent=recent, novel=novel,
-                           new_since_visit=new_since_visit, last_seen_at=last_seen_at,
-                           user_atom_count=user_atom_count)
+
+    try:
+        from app.feed_ranker import get_personalized_feed  # noqa: PLC0415
+        cat_kws = list(_CATEGORIES[category]["keywords"]) if category else None
+        username = current_user.username if current_user.is_authenticated else None
+        raw_rows = get_personalized_feed(username=username, category_keywords=cat_kws, sort=sort)
+        all_posts = [
+            {
+                "id": str(r[0]),
+                "title": r[1],
+                "format": r[2],
+                "topic_tags": r[3] or [],
+                "published_at": _ago(r[4]),
+                "author": r[5] or "anonymous",
+                "excerpt": r[6] or "",
+                "perspective_count": r[7] or 0,
+                "reach_score": round(float(r[8] or 0), 1),
+                "slug": r[9],
+                "category": _categorize_post(r[3] or []),
+            }
+            for r in raw_rows
+        ]
+    except Exception:
+        all_posts = []
+
+    # Group into category sections when no category filter is active
+    if category:
+        sections = [{"key": category, "label": _CATEGORIES[category]["label"], "posts": all_posts}]
+    else:
+        seen_ids: set = set()
+        sections = []
+        for key, cat in _CATEGORIES.items():
+            cat_posts = [p for p in all_posts if p["category"] == key and p["id"] not in seen_ids][:5]
+            for p in cat_posts:
+                seen_ids.add(p["id"])
+            if cat_posts:
+                sections.append({"key": key, "label": cat["label"], "posts": cat_posts})
+        # Catch-all for uncategorized posts
+        other = [p for p in all_posts if p["id"] not in seen_ids][:5]
+        if other:
+            sections.append({"key": "other", "label": "Ideas & More", "posts": other})
+
+    # Authenticated user's draft posts
+    if current_user.is_authenticated:
+        try:
+            cfg = get_config()
+            with psycopg.connect(cfg.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT sp.id, sp.title, sp.topic_tags, sp.format, sp.created_at
+                        FROM social_posts sp
+                        JOIN users u ON u.id = sp.author_user_id
+                        WHERE u.username = %s AND sp.status = 'draft'
+                        ORDER BY sp.created_at DESC LIMIT 3;
+                        """,
+                        (current_user.username,),
+                    )
+                    for r in cur.fetchall():
+                        draft_posts.append({
+                            "id": str(r[0]), "title": r[1],
+                            "topic_tags": r[2] or [], "format": r[3],
+                            "created_at": _ago(r[4]),
+                        })
+        except Exception:
+            pass
+
+    return render_template("site/landing.html",
+                           sections=sections,
+                           draft_posts=draft_posts,
+                           sort=sort,
+                           category=category,
+                           categories=_CATEGORIES,
+                           last_seen_at=last_seen_at,
+                           user_atom_count=user_atom_count,
+                           valid_sorts=("for_you", "new", "popular", "rising"))
 
 
 @site_bp.route("/signup", methods=["GET", "POST"])
@@ -193,24 +248,59 @@ def logout():
 @site_bp.route("/brain")
 @login_required
 def brain():
+    from flask import request as _req  # noqa: PLC0415
+
+    sort       = _req.args.get("sort", "newest")
+    type_filter = _req.args.get("type", "")
+    vis_filter  = _req.args.get("vis", "")
+    contested_only = _req.args.get("contested", "") == "1"
+
+    _sort_map = {
+        "newest":     "ma.created_at DESC",
+        "oldest":     "ma.created_at ASC",
+        "importance": "ma.importance DESC, ma.created_at DESC",
+        "confidence": "ma.confidence DESC, ma.created_at DESC",
+    }
+    order_clause = _sort_map.get(sort, "ma.created_at DESC")
+
+    _valid_types = {
+        "opinion", "preference", "belief", "decision",
+        "fact", "observation", "correction", "instruction",
+    }
+    _valid_vis = {"public", "private"}
+
+    where_extras = []
+    params: list = [current_user.username]
+    if type_filter in _valid_types:
+        where_extras.append("AND ma.memory_type = %s")
+        params.append(type_filter)
+    if vis_filter in _valid_vis:
+        where_extras.append("AND ma.visibility = %s")
+        params.append(vis_filter)
+    if contested_only:
+        where_extras.append("AND ma.disagreement_score >= 0.5")
+
+    extra_sql = " ".join(where_extras)
+
     atoms = []
     stats = {"total": 0, "facts": 0, "decisions": 0, "contested": 0}
     try:
         with _conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     SELECT DISTINCT ma.id, ma.content, ma.memory_type, ma.scope,
                            ma.confidence, ma.importance, ma.lifecycle_status, ma.created_at,
                            ma.disagreement_score, ma.visibility
                     FROM memory_atoms ma
                     JOIN memory_signals ms ON ms.memory_atom_id = ma.id
-                    WHERE ms.source_user_id = %s
+                    WHERE (ms.source_user_id = %s OR ms.source_user_id IS NULL)
                       AND ma.lifecycle_status = 'active'
-                    ORDER BY ma.importance DESC, ma.created_at DESC
-                    LIMIT 50;
+                      {extra_sql}
+                    ORDER BY {order_clause}
+                    LIMIT 100;
                     """,
-                    (current_user.username,),
+                    params,
                 )
                 rows = cur.fetchall()
                 atoms = [
@@ -222,13 +312,12 @@ def brain():
                         "confidence": round(float(r[4]), 2),
                         "importance": round(float(r[5]), 2),
                         "lifecycle_status": r[6],
-                        "created_at": r[7].strftime("%Y-%m-%d") if r[7] else "—",
+                        "created_at": r[7].strftime("%Y-%m-%d %H:%M") if r[7] else "—",
                         "contested": float(r[8] or 0) >= 0.5,
                         "visibility": r[9] or "private",
                     }
                     for r in rows
                 ]
-                # Stats
                 cur.execute(
                     """
                     SELECT
@@ -238,7 +327,8 @@ def brain():
                         COUNT(DISTINCT ma.id) FILTER (WHERE ma.disagreement_score >= 0.5)
                     FROM memory_atoms ma
                     JOIN memory_signals ms ON ms.memory_atom_id = ma.id
-                    WHERE ms.source_user_id = %s AND ma.lifecycle_status = 'active';
+                    WHERE (ms.source_user_id = %s OR ms.source_user_id IS NULL)
+                      AND ma.lifecycle_status = 'active';
                     """,
                     (current_user.username,),
                 )
@@ -252,7 +342,15 @@ def brain():
                     }
     except Exception:
         pass
-    return render_template("site/brain.html", atoms=atoms, stats=stats)
+    return render_template(
+        "site/brain.html",
+        atoms=atoms,
+        stats=stats,
+        sort=sort,
+        type_filter=type_filter,
+        vis_filter=vis_filter,
+        contested_only=contested_only,
+    )
 
 
 @site_bp.route("/settings")
@@ -339,7 +437,7 @@ def capture():
         )
         atom_id = result.committed_atom_id
         flash(
-            f"Captured {'(kept private)' if make_private else '— public and will appear in discussions'}.",
+            f"Captured {'(kept private)' if make_private else '— public and will appear in the feed'}.",
             "success",
         )
     except Exception as exc:
@@ -404,21 +502,34 @@ def feed():
     )
 
 
-@site_bp.route("/post/<uuid:post_id>")
-def post_detail(post_id):
+@site_bp.route("/post/<post_ref>")
+def post_detail(post_ref):
+    import uuid as _uuid  # noqa: PLC0415
+    # Accept UUID or slug. UUID hits 301-redirect to the canonical slug URL.
+    try:
+        _uuid.UUID(post_ref)
+        lookup_col = "id"
+    except ValueError:
+        lookup_col = "slug"
+
+    post_id = post_ref  # used below as the query parameter
     post = None
-    contributors = []
+    user_vote = None
+    ai_responses = []
+    has_pending_perspective = False
+    pending_perspective_body = None
     try:
         with _conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     SELECT sp.id, sp.title, sp.body, sp.format, sp.topic_tags,
                            sp.confidence_at_publish, sp.published_at, sp.status,
-                           u.username AS author
+                           u.username AS author, sp.perspective_count,
+                           sp.consensus_body, sp.consensus_updated_at, sp.slug
                     FROM social_posts sp
                     LEFT JOIN users u ON u.id = sp.author_user_id
-                    WHERE sp.id = %s;
+                    WHERE sp.{lookup_col} = %s;
                     """,
                     (str(post_id),),
                 )
@@ -434,26 +545,98 @@ def post_detail(post_id):
                         "published_at": r[6].strftime("%Y-%m-%d") if r[6] else None,
                         "status": r[7],
                         "author": r[8] or "anonymous",
+                        "perspective_count": r[9] or 0,
+                        "consensus_body": r[10],
+                        "consensus_updated_at": r[11].strftime("%Y-%m-%d %H:%M") if r[11] else None,
+                        "slug": r[12],
                     }
+                # Fetch current user's reaction (for button active state)
+                user_vote = None
+                if current_user.is_authenticated:
+                    cur.execute(
+                        """
+                        SELECT pr.vote FROM post_reactions pr
+                        JOIN users u ON u.id = pr.user_id
+                        WHERE pr.post_id = %s AND u.username = %s;
+                        """,
+                        (str(post_id), current_user.username),
+                    )
+                    vote_row = cur.fetchone()
+                    user_vote = vote_row[0] if vote_row else None
+
+                # Fetch AI-generated responses ordered by engagement
                 cur.execute(
                     """
-                    SELECT u.username, pc.contribution_type, pc.quote
-                    FROM post_contributors pc
-                    LEFT JOIN users u ON u.id = pc.user_id
-                    WHERE pc.post_id = %s
-                    ORDER BY pc.created_at;
+                    SELECT r.id, r.body, r.reach_score,
+                           COALESCE(rr.vote, NULL) AS user_vote,
+                           r.response_kind
+                    FROM post_ai_responses r
+                    LEFT JOIN users u2 ON u2.username = %s
+                    LEFT JOIN post_response_reactions rr
+                           ON rr.response_id = r.id AND rr.user_id = u2.id
+                    WHERE r.post_id = %s
+                    ORDER BY r.response_kind = 'synthesis' DESC,
+                             r.reach_score DESC, r.created_at ASC;
                     """,
-                    (str(post_id),),
+                    (current_user.username if current_user.is_authenticated else None,
+                     str(post_id)),
                 )
-                contributors = [
-                    {"username": r[0] or "anonymous", "type": r[1], "quote": r[2]}
+                ai_responses = [
+                    {
+                        "id": str(r[0]),
+                        "body": r[1],
+                        "reach_score": float(r[2]),
+                        "user_vote": r[3],
+                        "kind": r[4] or "synthesis",
+                    }
                     for r in cur.fetchall()
                 ]
+
+                # Check if the current user has a perspective still being processed
+                has_pending_perspective = False
+                pending_perspective_body = None
+                if current_user.is_authenticated:
+                    cur.execute(
+                        """
+                        SELECT body FROM perspectives
+                        WHERE post_id = %s
+                          AND author_user_id = (SELECT id FROM users WHERE username = %s)
+                          AND atom_id IS NULL
+                        ORDER BY created_at DESC
+                        LIMIT 1;
+                        """,
+                        (str(post_id), current_user.username),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        has_pending_perspective = True
+                        pending_perspective_body = row[0]
+
     except Exception:
         pass
     if not post:
         return "Post not found", 404
-    return render_template("site/post_detail.html", post=post, contributors=contributors)
+
+    # 301 redirect UUID access to canonical slug URL
+    if lookup_col == "id" and post.get("slug"):
+        return redirect(url_for("webapp.post_detail", post_ref=post["slug"]), 301)
+
+    # Record view + update interest vector (non-blocking, best-effort)
+    if current_user.is_authenticated and post.get("status") == "published":
+        try:
+            from app.profile_updater import record_post_view  # noqa: PLC0415
+            record_post_view(current_user.username, str(post_id))
+        except Exception:
+            pass
+
+    return render_template(
+        "site/post_detail.html",
+        post=post,
+        user_vote=user_vote,
+        ai_responses=ai_responses,
+        has_pending_perspective=has_pending_perspective,
+        pending_perspective_body=pending_perspective_body,
+    )
 
 
 @site_bp.route("/post/<uuid:post_id>/publish", methods=["POST"])
@@ -476,7 +659,7 @@ def publish_post(post_id):
     except Exception:
         pass
     flash("Post published.", "success")
-    return redirect(url_for("webapp.post_detail", post_id=post_id))
+    return redirect(url_for("webapp.post_detail", post_ref=str(post_id)))
 
 
 @site_bp.route("/post/<uuid:post_id>/discard", methods=["POST"])
@@ -501,18 +684,371 @@ def discard_post(post_id):
     return redirect(url_for("webapp.drafts"))
 
 
-@site_bp.route("/drafts")
+@site_bp.route("/post/<uuid:post_id>/perspective", methods=["POST"])
 @login_required
-def drafts():
-    posts = []
+def post_perspective(post_id):
+    """Add a perspective to a post.
+
+    Writes directly to the DB and returns immediately — no LLM in the request
+    path. The post_worker background thread picks up perspectives with
+    atom_id IS NULL and runs the commit pipeline asynchronously.
+
+    The unique index on (post_id, author_user_id, md5(body)) makes ON CONFLICT
+    DO NOTHING the dedup guard — double-submits silently no-op.
+    """
+    body = (request.form.get("perspective") or "").strip()
+    if not body or len(body) < 10:
+        flash("Perspective is too short.", "error")
+        return redirect(url_for("webapp.post_detail", post_ref=str(post_id)))
+
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                # atom_id left NULL — background worker fills it in
+                cur.execute(
+                    """
+                    INSERT INTO perspectives (post_id, author_user_id, author_username, body)
+                    VALUES (
+                        %s,
+                        (SELECT id FROM users WHERE username = %s),
+                        %s,
+                        %s
+                    )
+                    ON CONFLICT DO NOTHING;
+                    """,
+                    (str(post_id), current_user.username, current_user.username, body),
+                )
+                inserted = cur.rowcount
+                if inserted:
+                    cur.execute(
+                        """
+                        UPDATE social_posts
+                        SET perspective_count = perspective_count + 1,
+                            last_activity_at  = now()
+                        WHERE id = %s;
+                        """,
+                        (str(post_id),),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO user_notifications (user_id, post_id, new_atom_count, notification_type)
+                        SELECT sp.author_user_id, sp.id, 1, 'new_perspective'
+                        FROM social_posts sp
+                        WHERE sp.id = %s
+                          AND sp.author_user_id IS NOT NULL
+                          AND sp.author_user_id != (SELECT id FROM users WHERE username = %s)
+                        ON CONFLICT (user_id, post_id) WHERE read = false
+                        DO UPDATE SET new_atom_count = user_notifications.new_atom_count + 1;
+                        """,
+                        (str(post_id), current_user.username),
+                    )
+            conn.commit()
+        if inserted:
+            flash("Got it — your response is being processed and will appear in the community viewpoints shortly.", "success")
+        else:
+            flash("You already submitted that response.", "info")
+    except Exception as exc:
+        _logger.warning("post_perspective: db error: %s", exc)
+        flash("Something went wrong. Please try again.", "error")
+
+    return redirect(url_for("webapp.post_detail", post_ref=str(post_id)))
+
+
+@site_bp.route("/post/<uuid:post_id>/react", methods=["POST"])
+@login_required
+def post_react(post_id):
+    """Record or toggle a thumbs-up / thumbs-down reaction on a post.
+
+    Counts are never displayed. The vote feeds reach_score with lower
+    weight than a perspective: up=+0.3, down=-0.1.
+    Submitting the same vote again removes it (toggle off).
+    """
+    vote = request.form.get("vote", "").strip()
+    if vote not in ("up", "down"):
+        return redirect(url_for("webapp.post_detail", post_ref=str(post_id)))
+
+    WEIGHTS = {"up": 0.3, "down": -0.1}
+
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                user_id_row = cur.execute(
+                    "SELECT id FROM users WHERE username = %s;",
+                    (current_user.username,),
+                ).fetchone()
+                if not user_id_row:
+                    return redirect(url_for("webapp.post_detail", post_ref=str(post_id)))
+                user_id = user_id_row[0]
+
+                # Check existing vote
+                cur.execute(
+                    "SELECT vote FROM post_reactions WHERE post_id = %s AND user_id = %s;",
+                    (str(post_id), user_id),
+                )
+                existing = cur.fetchone()
+
+                if existing and existing[0] == vote:
+                    # Same vote — toggle off
+                    cur.execute(
+                        "DELETE FROM post_reactions WHERE post_id = %s AND user_id = %s;",
+                        (str(post_id), user_id),
+                    )
+                    cur.execute(
+                        "UPDATE social_posts SET reach_score = reach_score - %s WHERE id = %s;",
+                        (WEIGHTS[vote], str(post_id)),
+                    )
+                elif existing:
+                    # Different vote — swap
+                    old_weight = WEIGHTS[existing[0]]
+                    new_weight = WEIGHTS[vote]
+                    cur.execute(
+                        "UPDATE post_reactions SET vote = %s, created_at = now() "
+                        "WHERE post_id = %s AND user_id = %s;",
+                        (vote, str(post_id), user_id),
+                    )
+                    cur.execute(
+                        "UPDATE social_posts SET reach_score = reach_score - %s + %s WHERE id = %s;",
+                        (old_weight, new_weight, str(post_id)),
+                    )
+                else:
+                    # New vote
+                    cur.execute(
+                        "INSERT INTO post_reactions (post_id, user_id, vote) VALUES (%s, %s, %s);",
+                        (str(post_id), user_id, vote),
+                    )
+                    cur.execute(
+                        "UPDATE social_posts SET reach_score = reach_score + %s WHERE id = %s;",
+                        (WEIGHTS[vote], str(post_id)),
+                    )
+            conn.commit()
+    except Exception as exc:
+        _logger.warning("post_react: error: %s", exc)
+
+    # Update interest vector — reactions are a strong signal
+    try:
+        from app.profile_updater import record_post_reaction  # noqa: PLC0415
+        record_post_reaction(current_user.username, str(post_id), vote)
+    except Exception:
+        pass
+
+    return redirect(url_for("webapp.post_detail", post_ref=str(post_id)))
+
+
+@site_bp.route("/post/<uuid:post_id>/open-in-claude")
+@login_required
+def open_in_claude(post_id):
+    """Build a claude:// deep link pre-filled with post context and redirect to it."""
     try:
         with _conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
+                    "SELECT title, body, consensus_body FROM social_posts WHERE id = %s;",
+                    (str(post_id),),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return "Post not found", 404
+                title, body, consensus_body = row
+
+                cur.execute(
+                    """
+                    SELECT COALESCE(author_username, 'anonymous'), body
+                    FROM perspectives
+                    WHERE post_id = %s
+                    ORDER BY created_at ASC;
+                    """,
+                    (str(post_id),),
+                )
+                persp_rows = cur.fetchall()
+    except Exception as exc:
+        _logger.warning("open_in_claude: db error: %s", exc)
+        return redirect(url_for("webapp.post_detail", post_ref=str(post_id)))
+
+    CLOSING = (
+        "\n\n---\nHelp me engage with this discussion. "
+        "Summarize the key points of disagreement and suggest what I might add."
+    )
+    MAX_CHARS = 12_000
+
+    parts = [f"Analyzing this Synapse post:\n\nTitle: {title}\n\n{body}"]
+    total = len(parts[0])
+
+    if persp_rows:
+        header = "\n\n---\nCommunity perspectives:"
+        parts.append(header)
+        total += len(header)
+        for author, pbody in persp_rows:
+            line = f"\n{author}: {pbody}"
+            if total + len(line) > MAX_CHARS:
+                break
+            parts.append(line)
+            total += len(line)
+
+    if consensus_body:
+        snippet = f"\n\n---\nCommunity consensus:\n{consensus_body}"
+        if total + len(snippet) <= MAX_CHARS:
+            parts.append(snippet)
+
+    parts.append(CLOSING)
+    context = "".join(parts)
+
+    encoded = _urlquote(context, safe="")
+    return redirect(f"claude://claude.ai/new?q={encoded}", code=302)
+
+
+@site_bp.route("/response/<uuid:response_id>/react", methods=["POST"])
+@login_required
+def response_react(response_id):
+    """Thumbs up / down on an individual AI response. Redirects back to the post."""
+    vote = request.form.get("vote", "").strip()
+    post_id = request.form.get("post_id", "").strip()
+    if vote not in ("up", "down"):
+        return redirect(url_for("webapp.landing"))
+
+    WEIGHTS = {"up": 0.3, "down": -0.1}
+
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM users WHERE username = %s;",
+                            (current_user.username,))
+                row = cur.fetchone()
+                if not row:
+                    return redirect(url_for("webapp.post_detail", post_ref=str(post_id)) if post_id else url_for("webapp.landing"))
+                user_id = row[0]
+
+                cur.execute(
+                    "SELECT vote FROM post_response_reactions WHERE response_id = %s AND user_id = %s;",
+                    (str(response_id), user_id),
+                )
+                existing = cur.fetchone()
+
+                if existing and existing[0] == vote:
+                    cur.execute(
+                        "DELETE FROM post_response_reactions WHERE response_id = %s AND user_id = %s;",
+                        (str(response_id), user_id),
+                    )
+                    cur.execute(
+                        "UPDATE post_ai_responses SET reach_score = reach_score - %s WHERE id = %s;",
+                        (WEIGHTS[vote], str(response_id)),
+                    )
+                elif existing:
+                    old_w, new_w = WEIGHTS[existing[0]], WEIGHTS[vote]
+                    cur.execute(
+                        "UPDATE post_response_reactions SET vote = %s, created_at = now() "
+                        "WHERE response_id = %s AND user_id = %s;",
+                        (vote, str(response_id), user_id),
+                    )
+                    cur.execute(
+                        "UPDATE post_ai_responses SET reach_score = reach_score - %s + %s WHERE id = %s;",
+                        (old_w, new_w, str(response_id)),
+                    )
+                else:
+                    cur.execute(
+                        "INSERT INTO post_response_reactions (response_id, user_id, vote) VALUES (%s, %s, %s);",
+                        (str(response_id), user_id, vote),
+                    )
+                    cur.execute(
+                        "UPDATE post_ai_responses SET reach_score = reach_score + %s WHERE id = %s;",
+                        (WEIGHTS[vote], str(response_id)),
+                    )
+            conn.commit()
+    except Exception as exc:
+        _logger.warning("response_react: error: %s", exc)
+
+    if post_id:
+        return redirect(url_for("webapp.post_detail", post_ref=str(post_id)))
+    return redirect(url_for("webapp.landing"))
+
+
+@site_bp.route("/drafts/<uuid:post_id>/regenerate", methods=["POST"])
+@login_required
+def regenerate_draft(post_id):
+    """Rewrite a draft in place, consuming 1 regen token."""
+    from app.article_generator import generate_draft  # noqa: PLC0415
+
+    notes = request.form.get("notes", "").strip()
+
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT regen_tokens FROM users WHERE username = %s;",
+                    (current_user.username,),
+                )
+                token_row = cur.fetchone()
+                if not token_row or int(token_row[0]) < 1:
+                    flash("No rewrites left today — tokens refresh every 24 hours.", "error")
+                    return redirect(url_for("webapp.drafts"))
+
+                cur.execute(
+                    """
+                    SELECT sp.primary_atom_ids, sp.format
+                    FROM social_posts sp
+                    JOIN users u ON u.id = sp.author_user_id
+                    WHERE sp.id = %s AND u.username = %s AND sp.status = 'draft';
+                    """,
+                    (str(post_id), current_user.username),
+                )
+                row = cur.fetchone()
+        if not row:
+            flash("Draft not found.", "error")
+            return redirect(url_for("webapp.drafts"))
+
+        atom_ids = [str(a) for a in (row[0] or [])]
+        fmt = row[1] or "article"
+
+        result = generate_draft(
+            atom_ids=atom_ids,
+            author_username=current_user.username,
+            format_override=fmt,
+            extra_context=notes or None,
+            update_post_id=str(post_id),
+        )
+        if not result:
+            flash("Could not regenerate — try again shortly.", "error")
+            return redirect(url_for("webapp.drafts"))
+
+        # Deduct token only after a successful rewrite
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET regen_tokens = GREATEST(0, regen_tokens - 1)
+                    WHERE username = %s;
+                    """,
+                    (current_user.username,),
+                )
+            conn.commit()
+        flash("Draft rewritten.", "success")
+    except Exception:
+        flash("Regeneration failed — try again.", "error")
+
+    return redirect(url_for("webapp.drafts"))
+
+
+@site_bp.route("/drafts")
+@login_required
+def drafts():
+    posts = []
+    regen_tokens = 5
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT regen_tokens FROM users WHERE username = %s;",
+                    (current_user.username,),
+                )
+                token_row = cur.fetchone()
+                if token_row:
+                    regen_tokens = int(token_row[0])
+
+                cur.execute(
                     """
                     SELECT sp.id, sp.title, sp.format, sp.confidence_at_publish,
                            sp.created_at, sp.body, sp.source_turn_text,
-                           sp.topic_tags
+                           sp.topic_tags, sp.slug
                     FROM social_posts sp
                     JOIN users u ON u.id = sp.author_user_id
                     WHERE u.username = %s AND sp.status = 'draft'
@@ -531,12 +1067,45 @@ def drafts():
                         "preview": (r[5] or "")[:200],
                         "source_hint": (r[6] or "")[:120] if r[6] else None,
                         "topic_tags": r[7] or [],
+                        "slug": r[8],
                     }
                     for r in rows
                 ]
     except Exception:
         pass
-    return render_template("site/drafts.html", posts=posts)
+
+    return render_template("site/drafts.html", posts=posts, regen_tokens=regen_tokens)
+
+
+@site_bp.route("/drafts/generate", methods=["POST"])
+@login_required
+def generate_draft_from_suggestion():
+    """Turn a headline suggestion into a full draft by calling the article generator."""
+    import json as _json
+    from app.article_generator import generate_draft
+
+    raw_ids = request.form.get("atom_ids", "")
+    format_hint = request.form.get("format", None)
+    try:
+        atom_ids = _json.loads(raw_ids) if raw_ids.startswith("[") else raw_ids.split(",")
+        atom_ids = [a.strip() for a in atom_ids if a.strip()]
+    except Exception:
+        atom_ids = []
+
+    if not atom_ids:
+        flash("No atoms selected — nothing to generate.", "error")
+        return redirect(url_for("webapp.drafts"))
+
+    result = generate_draft(
+        atom_ids=atom_ids,
+        author_username=current_user.username,
+        format_override=format_hint or None,
+    )
+    if result:
+        flash("Draft created — review it below.", "success")
+    else:
+        flash("Could not generate a draft right now. Try again shortly.", "error")
+    return redirect(url_for("webapp.drafts"))
 
 
 @site_bp.route("/connections")
@@ -586,28 +1155,20 @@ def admin():
                 r = cur.fetchone()
                 stats = {"total": r[0], "public": r[1], "private": r[2], "novel": r[3]}
 
-                cur.execute("SELECT COUNT(*) FROM discussions;")
-                stats["discussions"] = cur.fetchone()[0]
-
-                # Resolution rate: % of discussions that reached answered/validated
                 cur.execute(
                     """
                     SELECT
-                        COUNT(*) FILTER (WHERE thread_status IN ('answered', 'validated')) AS resolved,
-                        COUNT(*) FILTER (WHERE thread_status IN ('gathering', 'updated', 'unresolved', 'reopened')) AS pending,
-                        COUNT(*) AS total
-                    FROM discussions;
+                        COUNT(*) FILTER (WHERE status = 'published') AS published,
+                        COUNT(*) FILTER (WHERE status = 'draft') AS draft,
+                        COALESCE(SUM(perspective_count), 0) AS perspectives
+                    FROM social_posts;
                     """
                 )
                 res = cur.fetchone()
-                resolved, pending, disc_total = (res[0] or 0), (res[1] or 0), (res[2] or 1)
-                stats["resolved"] = resolved
-                stats["pending"] = pending
-                stats["resolution_rate"] = round(100 * resolved / max(disc_total, 1), 1)
-                stats["disc_status"] = {
-                    r[0]: r[1]
-                    for r in cur.fetchmany(0) or []  # cleared by fetchone above — use stats
-                }
+                stats["posts_published"] = res[0] or 0
+                stats["posts_draft"] = res[1] or 0
+                stats["perspectives"] = res[2] or 0
+                stats["discussions"] = stats["posts_published"]  # legacy key
 
                 cur.execute("SELECT COUNT(*) FROM users;")
                 stats["users"] = cur.fetchone()[0]
@@ -701,13 +1262,13 @@ def api_graph():
         with _conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT id, title, topic_tags, atom_count, contributor_count,
-                           novelty_flag, last_activity_at
-                    FROM discussions ORDER BY atom_count DESC LIMIT 200;
+                    SELECT id, title, topic_tags, perspective_count,
+                           perspective_count, false, last_activity_at
+                    FROM social_posts WHERE status = 'published'
+                    ORDER BY perspective_count DESC LIMIT 200;
                 """)
                 rows = cur.fetchall()
 
-        # Build node list
         tag_to_ids: dict[str, list[str]] = {}
         for r in rows:
             nid = str(r[0])
@@ -723,7 +1284,6 @@ def api_graph():
             for tag in tags:
                 tag_to_ids.setdefault(tag, []).append(nid)
 
-        # Edges: discussions sharing a topic_tag
         seen: set[tuple] = set()
         for tag, ids in tag_to_ids.items():
             for i in range(len(ids)):
@@ -968,24 +1528,20 @@ def api_ingest():
 @site_bp.route("/explore")
 @login_required
 def explore():
-    """Public feed of auto-published discussions, ranked by user topic affinity.
-
-    For users with conversation history the feed is re-ranked so discussions
-    matching their atom corpus appear first. For new users with no history
-    the feed falls back to pure recency — broadcast always works.
-    """
+    """Published posts ranked by topic affinity; recency fallback for new users."""
     rows = []
     try:
         with _conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT d.id, d.title, d.topic_tags, d.contributor_count,
-                           d.atom_count, d.thread_status, d.last_activity_at,
-                           d.summary, d.novelty_flag
-                    FROM discussions d
-                    WHERE d.auto_published = true
-                    ORDER BY d.last_activity_at DESC
+                    SELECT sp.id, sp.title, sp.topic_tags, sp.perspective_count,
+                           sp.last_activity_at, LEFT(sp.body, 300) AS summary,
+                           u.username AS author, sp.slug
+                    FROM social_posts sp
+                    LEFT JOIN users u ON u.id = sp.author_user_id
+                    WHERE sp.status = 'published'
+                    ORDER BY sp.last_activity_at DESC
                     LIMIT 100;
                     """
                 )
@@ -994,17 +1550,15 @@ def explore():
                         "id": str(r[0]),
                         "title": r[1],
                         "topic_tags": r[2] or [],
-                        "contributor_count": r[3],
-                        "atom_count": r[4],
-                        "thread_status": r[5] or "gathering",
-                        "last_activity": _ago(r[6]),
-                        "summary": r[7] or "",
-                        "novelty_flag": r[8],
+                        "perspective_count": r[3] or 0,
+                        "last_activity": _ago(r[4]),
+                        "summary": r[5] or "",
+                        "author": r[6] or "anonymous",
+                        "slug": r[7],
                     })
     except Exception:
         pass
 
-    # Re-rank by topic affinity if the user has history; broadcast fallback if not
     user_tags: list[str] = []
     if current_user.is_authenticated and rows:
         try:
@@ -1015,7 +1569,7 @@ def explore():
             )
             rows = rank_discussions_by_affinity(rows, user_tags)
         except Exception:
-            pass  # silently fall back to recency order
+            pass
 
     return render_template("site/explore.html", discussions=rows, user_tags=user_tags)
 
@@ -1023,7 +1577,7 @@ def explore():
 @site_bp.route("/categories")
 @login_required
 def categories():
-    """Browse discussions by topic tag — no profile required."""
+    """Browse published posts by topic tag."""
     selected = request.args.get("tag", "").strip().lower()
     all_tags: list[str] = []
     tag_counts: dict[str, int] = {}
@@ -1032,12 +1586,11 @@ def categories():
     try:
         with _conn() as conn:
             with conn.cursor() as cur:
-                # Aggregate all topic tags across published discussions
                 cur.execute(
                     """
                     SELECT unnest(topic_tags) AS tag, COUNT(*) AS cnt
-                    FROM discussions
-                    WHERE auto_published = true
+                    FROM social_posts
+                    WHERE status = 'published'
                     GROUP BY tag
                     ORDER BY cnt DESC, tag ASC
                     LIMIT 60;
@@ -1050,13 +1603,14 @@ def categories():
                 if selected and selected in tag_counts:
                     cur.execute(
                         """
-                        SELECT d.id, d.title, d.topic_tags, d.contributor_count,
-                               d.atom_count, d.thread_status, d.last_activity_at,
-                               d.summary, d.novelty_flag
-                        FROM discussions d
-                        WHERE d.auto_published = true
-                          AND %s = ANY(d.topic_tags)
-                        ORDER BY d.last_activity_at DESC
+                        SELECT sp.id, sp.title, sp.topic_tags, sp.perspective_count,
+                               sp.last_activity_at, LEFT(sp.body, 300),
+                               u.username, sp.slug
+                        FROM social_posts sp
+                        LEFT JOIN users u ON u.id = sp.author_user_id
+                        WHERE sp.status = 'published'
+                          AND %s = ANY(sp.topic_tags)
+                        ORDER BY sp.last_activity_at DESC
                         LIMIT 50;
                         """,
                         (selected,),
@@ -1066,12 +1620,11 @@ def categories():
                             "id": str(r[0]),
                             "title": r[1],
                             "topic_tags": r[2] or [],
-                            "contributor_count": r[3],
-                            "atom_count": r[4],
-                            "thread_status": r[5] or "gathering",
-                            "last_activity": _ago(r[6]),
-                            "summary": r[7] or "",
-                            "novelty_flag": r[8],
+                            "perspective_count": r[3] or 0,
+                            "last_activity": _ago(r[4]),
+                            "summary": r[5] or "",
+                            "author": r[6] or "anonymous",
+                            "slug": r[7],
                         })
     except Exception:
         pass
@@ -1088,7 +1641,7 @@ def categories():
 @site_bp.route("/search")
 @login_required
 def search():
-    """Find existing discussions before creating a new one — reduces duplicates."""
+    """Search published posts and memory atoms."""
     query = request.args.get("q", "").strip()
     results: list[dict] = []
     atom_results: list[dict] = []
@@ -1097,17 +1650,16 @@ def search():
         try:
             with _conn() as conn:
                 with conn.cursor() as cur:
-                    # Full-text search on discussion title + summary
                     cur.execute(
                         """
-                        SELECT d.id, d.title, d.topic_tags, d.contributor_count,
-                               d.atom_count, d.thread_status, d.last_activity_at,
-                               d.summary
-                        FROM discussions d
-                        WHERE d.auto_published = true
-                          AND (d.title ILIKE %s OR d.summary ILIKE %s
-                               OR %s = ANY(d.topic_tags))
-                        ORDER BY d.contributor_count DESC, d.last_activity_at DESC
+                        SELECT sp.id, sp.title, sp.topic_tags, sp.perspective_count,
+                               sp.last_activity_at, LEFT(sp.body, 300), u.username, sp.slug
+                        FROM social_posts sp
+                        LEFT JOIN users u ON u.id = sp.author_user_id
+                        WHERE sp.status = 'published'
+                          AND (sp.title ILIKE %s OR sp.body ILIKE %s
+                               OR %s = ANY(sp.topic_tags))
+                        ORDER BY sp.perspective_count DESC, sp.last_activity_at DESC
                         LIMIT 20;
                         """,
                         (f"%{query}%", f"%{query}%", query.lower()),
@@ -1117,20 +1669,18 @@ def search():
                             "id": str(r[0]),
                             "title": r[1],
                             "topic_tags": r[2] or [],
-                            "contributor_count": r[3],
-                            "atom_count": r[4],
-                            "thread_status": r[5] or "gathering",
-                            "last_activity": _ago(r[6]),
-                            "summary": r[7] or "",
+                            "perspective_count": r[3] or 0,
+                            "last_activity": _ago(r[4]),
+                            "summary": r[5] or "",
+                            "author": r[6] or "anonymous",
+                            "slug": r[7],
                         })
         except Exception:
             pass
 
-        # Also search memory atoms (semantic — finds related knowledge)
         try:
-            from app.topic_affinity import get_user_topic_tags
+            from app.topic_affinity import get_user_topic_tags  # noqa: F401
             import os as _os
-            db_url = _os.environ.get("DATABASE_URL", "")
             store = __import__("app.db", fromlist=["get_store"]).get_store()
             atom_rows = store.search_memories_full(
                 query=query, limit=5, min_similarity=0.45
@@ -1155,349 +1705,13 @@ def search():
 
 
 @site_bp.route("/discussions")
-@login_required
-def discussions():
-    rows = []
-    unread_total = 0
-    status_filter = request.args.get("status", "").strip().lower()
-    valid_statuses = {"gathering", "updated", "answered", "validated", "reopened", "unresolved"}
-    if status_filter not in valid_statuses:
-        status_filter = ""
-    try:
-        with _conn() as conn:
-            with conn.cursor() as cur:
-                base_sql = """
-                    SELECT d.id, d.title, d.topic_tags, d.contributor_count,
-                           d.atom_count, d.novelty_flag, d.last_activity_at,
-                           COALESCE(SUM(n.new_atom_count) FILTER (WHERE n.read = false), 0) AS unread,
-                           d.thread_status
-                    FROM discussions d
-                    JOIN discussion_atoms da ON da.discussion_id = d.id
-                    LEFT JOIN user_notifications n
-                        ON n.discussion_id = d.id
-                        AND n.user_id = (SELECT id FROM users WHERE username = %s)
-                    WHERE da.source_user_id = %s
-                    {status_clause}
-                    GROUP BY d.id
-                    ORDER BY d.last_activity_at DESC
-                    LIMIT 50;
-                """
-                if status_filter:
-                    sql = base_sql.format(status_clause="AND d.thread_status = %s")
-                    params = (current_user.username, current_user.username, status_filter)
-                else:
-                    sql = base_sql.format(status_clause="")
-                    params = (current_user.username, current_user.username)
-                cur.execute(sql, params)
-                for r in cur.fetchall():
-                    unread = int(r[7])
-                    unread_total += unread
-                    rows.append({
-                        "id": str(r[0]),
-                        "title": r[1],
-                        "topic_tags": r[2] or [],
-                        "contributor_count": r[3],
-                        "atom_count": r[4],
-                        "novelty_flag": r[5],
-                        "last_activity": _ago(r[6]),
-                        "unread": unread,
-                        "thread_status": r[8] or "active",
-                    })
-    except Exception:
-        pass
-    return render_template("site/discussions.html",
-                           discussions=rows, unread_total=unread_total,
-                           status_filter=status_filter)
+def discussions_redirect():
+    return redirect(url_for("webapp.feed"), 301)
 
 
 @site_bp.route("/discussion/<uuid:disc_id>")
-@login_required
-def discussion_detail(disc_id):
-    disc = None
-    contributions = []
-    try:
-        with _conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT id, title, topic_tags, contributor_count, novelty_flag, "
-                    "last_activity_at, thread_status "
-                    "FROM discussions WHERE id = %s;",
-                    (str(disc_id),),
-                )
-                r = cur.fetchone()
-                if r:
-                    disc = {
-                        "id": str(r[0]), "title": r[1], "topic_tags": r[2] or [],
-                        "contributor_count": r[3], "novelty_flag": r[4],
-                        "last_activity": r[5].strftime("%Y-%m-%d") if r[5] else "—",
-                        "thread_status": r[6] or "active",
-                        "revision_flag": False,  # set below if contested atoms found
-                    }
-                # Check if any linked atoms are contested — triggers revision badge
-                if disc:
-                    cur.execute(
-                        """
-                        SELECT 1 FROM discussion_atoms da
-                        JOIN memory_atoms ma ON ma.id = da.atom_id
-                        WHERE da.discussion_id = %s
-                          AND ma.lifecycle_status = 'contested'
-                        LIMIT 1;
-                        """,
-                        (str(disc_id),),
-                    )
-                    disc["revision_flag"] = cur.fetchone() is not None
-                cur.execute(
-                    """
-                    SELECT ma.content, ma.memory_type, ma.confidence,
-                           da.novelty_score, da.source_user_id, da.added_at,
-                           ma.topic_tags
-                    FROM discussion_atoms da
-                    JOIN memory_atoms ma ON ma.id = da.atom_id
-                    WHERE da.discussion_id = %s
-                      AND (ma.visibility = 'public'
-                           OR da.source_user_id = %s
-                           OR da.source_user_id = 'synapse_synthesis')
-                    ORDER BY da.novelty_score DESC, da.added_at ASC
-                    LIMIT 100;
-                    """,
-                    (str(disc_id), current_user.username),
-                )
-                for r in cur.fetchall():
-                    is_mine = r[4] == current_user.username
-                    contributions.append({
-                        "content": r[0],
-                        "memory_type": r[1],
-                        "confidence": round(float(r[2]), 2),
-                        "novelty_score": round(float(r[3]), 2),
-                        "is_mine": is_mine,
-                        "attribution": "you" if is_mine else "anonymous contributor",
-                        "added_at": r[5].strftime("%Y-%m-%d") if r[5] else "—",
-                        "topic_tags": r[6] or [],
-                    })
-                # Check if any linked atom has high disagreement (flagged for revision)
-                cur.execute(
-                    """
-                    SELECT 1 FROM discussion_atoms da
-                    JOIN memory_atoms ma ON ma.id = da.atom_id
-                    WHERE da.discussion_id = %s AND ma.disagreement_score > 0.5
-                    LIMIT 1;
-                    """,
-                    (str(disc_id),),
-                )
-                revision_flag = cur.fetchone() is not None
-                if disc:
-                    disc["revision_flag"] = revision_flag
-                # Mark notifications read
-                cur.execute(
-                    """
-                    UPDATE user_notifications SET read = true
-                    WHERE discussion_id = %s
-                      AND user_id = (SELECT id FROM users WHERE username = %s);
-                    """,
-                    (str(disc_id), current_user.username),
-                )
-            conn.commit()
-    except Exception:
-        pass
-    if not disc:
-        return "Discussion not found", 404
-    # Related discussions by topic_tags overlap
-    related = []
-    if disc.get("topic_tags"):
-        try:
-            with _conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT id, title, contributor_count, atom_count, last_activity_at
-                        FROM discussions
-                        WHERE id != %s AND topic_tags && %s
-                        ORDER BY last_activity_at DESC LIMIT 5;
-                        """,
-                        (str(disc_id), disc["topic_tags"]),
-                    )
-                    related = [
-                        {"id": str(r[0]), "title": r[1],
-                         "contributor_count": r[2], "atom_count": r[3],
-                         "last_activity": _ago(r[4])}
-                        for r in cur.fetchall()
-                    ]
-        except Exception:
-            pass
-    return render_template("site/discussion_detail.html", disc=disc,
-                           contributions=contributions, related=related)
-
-
-@site_bp.route("/discussion/<uuid:disc_id>/react", methods=["POST"])
-@login_required
-def discussion_react(disc_id):
-    """Accept a perspective from any browsing user and feed it into the pipeline.
-
-    The perspective is committed as a memory atom through the full write pipeline
-    (quality → reconcile → critic → risk gate → dual-write). The new atom is
-    linked to the discussion. The discussion's contributor count and
-    last_activity_at are updated. A notification is queued for the originating
-    user — they receive a synthesis later, not the raw text.
-    """
-    perspective = (request.form.get("perspective") or "").strip()
-    if not perspective or len(perspective) < 10:
-        flash("Perspective is too short.", "error")
-        return redirect(url_for("webapp.discussion_detail", disc_id=disc_id))
-
-    try:
-        from app.commit_pipeline import MemoryCommitPipeline
-
-        pipeline = MemoryCommitPipeline()
-        candidate = {
-            "content": perspective,
-            "memory_type": "observation",
-            "scope": f"discussion:{disc_id}",
-            "importance": 0.6,
-            "should_store": True,
-        }
-        decision = pipeline.commit_candidate(
-            candidate,
-            source_key=current_user.username,
-            source_type="user_reaction",
-            source_user_id=current_user.username,
-        )
-        atom_id = decision.committed_atom_id
-
-        if atom_id:
-            with _conn() as conn:
-                with conn.cursor() as cur:
-                    # Link new atom to discussion
-                    cur.execute(
-                        """
-                        INSERT INTO discussion_atoms
-                            (discussion_id, atom_id, source_user_id, novelty_score)
-                        VALUES (%s, %s, %s, 0.5)
-                        ON CONFLICT (discussion_id, atom_id) DO NOTHING;
-                        """,
-                        (str(disc_id), atom_id, current_user.username),
-                    )
-                    # Update discussion activity and contributor count.
-                    # If already answered/validated, reopen — new evidence arrived.
-                    cur.execute(
-                        """
-                        UPDATE discussions
-                        SET last_activity_at = now(),
-                            contributor_count = contributor_count + 1,
-                            atom_count = atom_count + 1,
-                            thread_status = CASE
-                                WHEN thread_status IN ('answered', 'validated') THEN 'reopened'
-                                ELSE thread_status
-                            END
-                        WHERE id = %s
-                        RETURNING thread_status;
-                        """,
-                        (str(disc_id),),
-                    )
-                    new_status = (cur.fetchone() or [None])[0]
-                    # Reopened → fire an immediate notification for the creator
-                    if new_status == "reopened":
-                        cur.execute(
-                            """
-                            INSERT INTO user_notifications
-                                (user_id, discussion_id, new_atom_count, notification_type)
-                            SELECT d.created_by_user_id, d.id, 1, 'reopened'
-                            FROM discussions d
-                            WHERE d.id = %s
-                              AND d.created_by_user_id IS NOT NULL
-                            ON CONFLICT (user_id, discussion_id) WHERE read = false
-                            DO UPDATE SET new_atom_count = user_notifications.new_atom_count + 1,
-                                          notification_type = 'reopened';
-                            """,
-                            (str(disc_id),),
-                        )
-                    # Queue notification for the discussion creator (not the reactor).
-                    # Batched: upsert increments new_atom_count so multiple reactions
-                    # produce one notification row, not one per reaction.
-                    cur.execute(
-                        """
-                        INSERT INTO user_notifications (user_id, discussion_id, new_atom_count)
-                        SELECT d.created_by_user_id, d.id, 1
-                        FROM discussions d
-                        WHERE d.id = %s
-                          AND d.created_by_user_id IS NOT NULL
-                          AND d.created_by_user_id != (SELECT id FROM users WHERE username = %s)
-                        ON CONFLICT (user_id, discussion_id) WHERE read = false
-                        DO UPDATE SET new_atom_count = user_notifications.new_atom_count + 1;
-                        """,
-                        (str(disc_id), current_user.username),
-                    )
-                conn.commit()
-            # Trigger synthesis in background — non-blocking
-            import threading as _threading
-            from app.discussion_synthesizer import synthesise_discussion
-            import os as _os
-            _db_url = _os.environ.get("DATABASE_URL", "")
-            _disc_id_str = str(disc_id)
-            _t = _threading.Thread(
-                target=synthesise_discussion, args=(_disc_id_str, _db_url), daemon=True
-            )
-            _t.start()
-            flash("Your perspective has been added.", "success")
-        else:
-            flash("Your perspective was noted but didn't produce new insight.", "info")
-    except Exception as exc:
-        flash("Something went wrong. Please try again.", "error")
-        _logger.warning("discussion_react: %s", exc)
-
-    return redirect(url_for("webapp.discussion_detail", disc_id=disc_id))
-
-
-@site_bp.route("/discussion/<uuid:disc_id>/helpful", methods=["POST"])
-@login_required
-def discussion_helpful(disc_id):
-    """Mark an answered discussion as helpful — advances status to Validated.
-
-    Increases confidence on the linked synthesis atom. Only valid when
-    thread_status is 'answered'. Creator or any contributor can mark it.
-    """
-    try:
-        with _conn() as conn:
-            with conn.cursor() as cur:
-                # Only advance if currently answered
-                cur.execute(
-                    """
-                    UPDATE discussions
-                    SET thread_status = 'validated', last_activity_at = now()
-                    WHERE id = %s AND thread_status = 'answered'
-                    RETURNING id;
-                    """,
-                    (str(disc_id),),
-                )
-                updated = cur.fetchone()
-                if updated:
-                    # Boost confidence on all atoms linked to this discussion
-                    cur.execute(
-                        """
-                        UPDATE memory_atoms ma
-                        SET confidence = LEAST(confidence + 0.08, 1.0),
-                            support_weight = support_weight + 1
-                        FROM discussion_atoms da
-                        WHERE da.discussion_id = %s AND da.atom_id = ma.id;
-                        """,
-                        (str(disc_id),),
-                    )
-                    # Increment usefulness_score for all contributors — prior outcomes tracking
-                    cur.execute(
-                        """
-                        UPDATE users u
-                        SET usefulness_score = usefulness_score + 0.1
-                        FROM discussion_atoms da
-                        WHERE da.discussion_id = %s
-                          AND da.source_user_id = u.username;
-                        """,
-                        (str(disc_id),),
-                    )
-            conn.commit()
-        flash("Marked as helpful — the knowledge was confirmed.", "success")
-    except Exception as exc:
-        _logger.warning("discussion_helpful: %s", exc)
-        flash("Could not record your rating.", "error")
-    return redirect(url_for("webapp.discussion_detail", disc_id=disc_id))
+def discussion_detail_redirect(disc_id):
+    return redirect(url_for("webapp.feed"), 301)
 
 
 @site_bp.route("/notifications")
@@ -1510,11 +1724,10 @@ def notifications():
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT n.id, d.id, d.title, d.thread_status,
-                           n.new_atom_count, n.read, n.created_at,
-                           COALESCE(n.notification_type, 'reaction')
+                    SELECT n.id, sp.id, sp.title, n.new_atom_count,
+                           n.read, n.created_at, n.notification_type, sp.slug
                     FROM user_notifications n
-                    JOIN discussions d ON d.id = n.discussion_id
+                    JOIN social_posts sp ON sp.id = n.post_id
                     WHERE n.user_id = (SELECT id FROM users WHERE username = %s)
                     ORDER BY n.created_at DESC
                     LIMIT 50;
@@ -1522,34 +1735,20 @@ def notifications():
                     (current_user.username,),
                 )
                 for r in cur.fetchall():
-                    status = r[3] or "active"
-                    notif_type = r[7]
-                    if notif_type == "related_discussion":
-                        message = "Others have been discussing a topic similar to something you've been thinking about."
-                    elif notif_type == "targeted":
-                        message = "We think you may have insight into this — you were specifically invited."
-                    elif notif_type == "stalled":
-                        message = "We're still looking for the right people to respond to your question. It may take a little longer."
-                    elif notif_type == "published":
-                        message = "Your conversation was shared with people who may know more."
-                    elif notif_type in ("answered",) or status == "answered":
-                        message = "Your conversation has a new answer."
-                    elif notif_type == "reopened" or status == "reopened":
-                        message = "New information arrived on your conversation."
-                    elif status == "updated":
-                        count = r[4]
-                        message = f"New perspective{'s' if count != 1 else ''} arrived on your conversation."
+                    notif_type = r[6] or "new_perspective"
+                    count = r[3]
+                    if notif_type == "new_perspective":
+                        message = f"{count} new perspective{'s' if count != 1 else ''} on your post."
                     else:
-                        count = r[4]
-                        message = f"{count} new perspective{'s' if count != 1 else ''} added."
+                        message = f"Activity on your post ({notif_type})."
                     items.append({
                         "id": str(r[0]),
-                        "disc_id": str(r[1]),
-                        "disc_title": r[2],
-                        "thread_status": status,
+                        "post_id": str(r[1]),
+                        "post_slug": r[7] or str(r[1]),
+                        "post_title": r[2],
                         "message": message,
-                        "read": r[5],
-                        "created_at": _ago(r[6]),
+                        "read": r[4],
+                        "created_at": _ago(r[5]),
                     })
                 # Mark all read
                 cur.execute(
@@ -1640,29 +1839,26 @@ def chat():
     history: list[dict] = _session_load(session_id)
     error = None
 
-    # Pre-load discussion context when arriving via "Discuss in depth" link
+    # Pre-load post context when arriving via "Chat about this" link
     if request.method == "GET" and not history:
-        disc_param = request.args.get("discussion", "").strip()
+        disc_param = request.args.get("post", "").strip()
         if disc_param:
             try:
                 with _conn() as conn:
                     with conn.cursor() as cur:
                         cur.execute(
-                            "SELECT title, atom_count, contributor_count FROM discussions WHERE id = %s;",
+                            "SELECT title, perspective_count FROM social_posts WHERE id = %s;",
                             (disc_param,),
                         )
                         disc_row = cur.fetchone()
                 if disc_row:
-                    disc_title, atom_count, contributor_count = disc_row
-                    disc_summary = None
+                    disc_title, contributor_count = disc_row
                     context_msg = (
                         f"I'd like to discuss: **{disc_title}**"
-                        + (f"\n\n{disc_summary}" if disc_summary else "")
-                        + f"\n\nThis topic has {contributor_count} contributor(s) and {atom_count} idea(s) in the knowledge base. "
-                        "What can you tell me about it, and what should I know?"
+                        + f"\n\nThis post has {contributor_count} perspective(s) on it. "
+                        "What can you tell me about this topic and what should I know?"
                     )
                     history = [{"role": "user", "content": context_msg}]
-                    # Immediately generate an opening response so the user lands in a live conversation
                     from app.chat import chat_with_research, clean_assistant_response
                     messages_for_llm = [{"role": "user", "content": context_msg}]
                     raw_answer, memories, _, _, _, _, _ = chat_with_research(
@@ -1758,6 +1954,11 @@ def chat_clear():
         except Exception:
             pass
     return redirect(url_for("webapp.chat"))
+
+
+@site_bp.route("/privacy")
+def privacy():
+    return render_template("site/privacy.html")
 
 
 # ── Health (for Railway/Render healthcheck) ───────────────────────────────────

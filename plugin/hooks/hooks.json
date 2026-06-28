@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node hooks/session-start.js",
+            "timeout": 10,
+            "statusMessage": "Pulling memory context..."
+          }
+        ]
+      }
+    ]
+  }
+}

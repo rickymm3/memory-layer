@@ -20,7 +20,7 @@ def store_memory_auto(
     matched_memory_ids: list[str] | None = None,
     task_run_id: str | None = None,
     source_user_id: str | None = None,
-    visibility: str = "private",
+    visibility: str = "public",
 ) -> dict[str, Any]:
     """Store a candidate through the full commit pipeline and return a write report.
 

@@ -26,6 +26,7 @@ import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations, PromptMessage, TextContent
 
 from mcp_server.tools.get import get_memory_by_id
 from mcp_server.tools.health import get_memory_health
@@ -48,7 +49,7 @@ Triggers: preferences with reasons, architecture decisions, corrections, frustra
 mcp = FastMCP("memoryLayer", instructions=_WRITE_PROTOCOL)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title="Memory Health Check", readOnlyHint=True))
 def memory_health() -> dict[str, Any]:
     """Check memory-layer health: DB reachability, Ollama reachability, atom count.
 
@@ -58,7 +59,7 @@ def memory_health() -> dict[str, Any]:
     return get_memory_health()
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title="Search Memories", readOnlyHint=True))
 def memory_search(
     query: str,
     limit: int = 5,
@@ -88,7 +89,7 @@ def memory_search(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title="Store Memory", readOnlyHint=False, destructiveHint=True))
 def memory_store_auto(
     content: str,
     memory_type: str,
@@ -100,7 +101,7 @@ def memory_store_auto(
     reconciliation_reason: str | None = None,
     matched_memory_ids: list[str] | None = None,
     source_user_id: str | None = None,
-    visibility: str = "private",
+    visibility: str = "public",
 ) -> dict[str, Any]:
     """Store a memory atom through the full commit pipeline.
 
@@ -125,7 +126,7 @@ def memory_store_auto(
         reconciliation_reason: Reason string from reconciler output.
         matched_memory_ids: Related existing atom UUIDs.
         source_user_id: User identity for multi-user provenance tracking.
-        visibility: Access boundary: private | team | public. Default private.
+        visibility: Access boundary: private | team | public. Default public. Override to private only for passwords, PII, or sensitive personal details.
     """
     # Priority: explicit arg → SSE auth context → MEMORY_USER_ID env var (stdio mode)
     from mcp_server.auth_context import current_user_id as _uid_ctx  # noqa: PLC0415
@@ -146,7 +147,7 @@ def memory_store_auto(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title="Get Memory by ID", readOnlyHint=True))
 def memory_get(memory_id: str) -> dict[str, Any] | None:
     """Fetch a single memory atom by UUID, including its signals summary.
 
@@ -160,7 +161,7 @@ def memory_get(memory_id: str) -> dict[str, Any] | None:
     return get_memory_by_id(memory_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title="Load Session Context", readOnlyHint=True))
 def memory_task_context(
     project_scope: str,
     model_scope: str | None = None,
@@ -198,7 +199,7 @@ def memory_task_context(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title="Audit Memory Corpus", readOnlyHint=True))
 def memory_audit(
     scope: str | None = None,
     stale_days: int = 90,
@@ -246,7 +247,7 @@ def memory_audit(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title="Link Two Memories", readOnlyHint=False, destructiveHint=True))
 def memory_link_atoms(
     atom_a_id: str,
     atom_b_id: str,
@@ -275,7 +276,7 @@ def memory_link_atoms(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title="Find Related Memories", readOnlyHint=True))
 def memory_related(
     atom_id: str,
     depth: int = 1,
@@ -300,7 +301,7 @@ def memory_related(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title="Ingest Conversation", readOnlyHint=False, destructiveHint=True))
 def memory_push_conversation(
     transcript: str,
     is_jsonl_path: bool = False,
@@ -327,6 +328,85 @@ def memory_push_conversation(
         source_user_id=current_user_id(),
         is_jsonl_path=is_jsonl_path,
     )
+
+
+_START_SESSION_TEXT = """\
+🧠 **Starting a Synapse memory session**
+
+Before we begin — a quick heads-up on what this connection does:
+
+• What you share may be stored as memory atoms (your beliefs, preferences, decisions, experiences, facts)
+• Atoms can contribute to public posts on Synapse, visible to other users
+• Passwords, API keys, and private personal details are kept private automatically
+• You can say "keep this private" at any point to exclude something from storage
+
+Selecting this prompt means you're good with this for our conversation.
+If you want to push a conversation retroactively instead, use /push_to_synapse.
+
+---
+
+Please call memory_task_context now with:
+  project_scope = "project:memory-layer"
+  model_scope   = "model:claude-sonnet-4-6"
+  task_hint     = "general session — user will direct"
+
+Then confirm you're loaded and ready.
+
+---
+
+**Your two roles in this session:**
+
+**1. Memory writer — mandatory after every turn.**
+Call memory_store_auto after ANY turn where the user shared something worth remembering:
+facts, opinions, experiences, project details, plans, corrections, preferences — all of it.
+Do NOT skip a turn because it felt "informational." Information IS what gets stored.
+The only turns that don't need a write are pure pleasantries ("ok", "thanks", "got it").
+Every write must include WHAT + WHY + CONTEXT. Entity-level facts (names, numbers,
+mechanics, rules about things the user created) must be preserved verbatim — do not
+compress them into abstract summaries.
+
+**2. Conversation coach — guide toward post-worthy depth.**
+After each response, briefly assess whether this conversation has enough to generate a
+good post: at least 3 distinct opinions, experiences, or facts on the same topic.
+If it's thin, naturally invite more — one follow-up question that would help:
+  • Ask for their opinion on a specific angle: "What's your take on X?"
+  • Ask for a concrete example: "Has that come up in your own work?"
+  • Ask what they actually believe: "Do you think that's the right call?"
+Keep it conversational — one question woven into your response, not a checklist.
+If the conversation already has depth, don't force it — let it flow.\
+"""
+
+_PUSH_TEXT = """\
+📤 **Push this conversation to Synapse**
+
+You're about to send this conversation retroactively to the Synapse memory layer.
+
+What will happen:
+• The conversation is analyzed for durable memories — beliefs, decisions, preferences
+• Extracted atoms are stored as public by default
+• Passwords and private details are automatically kept private
+• Atoms may contribute to or update public posts on Synapse
+
+By proceeding you're consenting to this for the current conversation.
+
+---
+
+Please call memory_push_conversation now.
+Pass the conversation transcript as the "transcript" argument.
+Set is_jsonl_path = false.\
+"""
+
+
+@mcp.prompt()
+def start_session() -> list[PromptMessage]:
+    """Start a memory-enabled session: consent disclosure + load your Synapse context."""
+    return [PromptMessage(role="user", content=TextContent(type="text", text=_START_SESSION_TEXT))]
+
+
+@mcp.prompt()
+def push_to_synapse() -> list[PromptMessage]:
+    """Retroactively push this conversation to Synapse. Use when you forgot to start a session."""
+    return [PromptMessage(role="user", content=TextContent(type="text", text=_PUSH_TEXT))]
 
 
 if __name__ == "__main__":

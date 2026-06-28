@@ -13,7 +13,8 @@
   </div>
 </div>
 
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem;margin-bottom:1.75rem">
+{# ── Stats row ─────────────────────────────────────────────────────────────── #}
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem;margin-bottom:1.5rem">
   {% for label, val, color in [('Total', stats.total, 'var(--text)'), ('Facts', stats.facts, 'var(--green)'), ('Decisions', stats.decisions, 'var(--accent)'), ('Contested', stats.contested, 'var(--red)')] %}
   <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:.85rem 1rem;text-align:center">
     <div style="font-size:1.6rem;font-weight:700;color:{{ color }}">{{ val }}</div>
@@ -22,6 +23,78 @@
   {% endfor %}
 </div>
 
+{# ── Filter bar ────────────────────────────────────────────────────────────── #}
+<form method="get" action="{{ url_for('webapp.brain') }}"
+      style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:1.25rem">
+
+  {# Sort #}
+  <div style="display:flex;align-items:center;gap:.35rem;font-size:.8rem;color:var(--muted)">
+    <span>Sort</span>
+    <select name="sort" onchange="this.form.submit()"
+            style="font-size:.8rem;padding:.25rem .5rem;border:1px solid var(--border);
+                   border-radius:.35rem;background:var(--bg2);color:var(--fg);cursor:pointer">
+      <option value="newest"     {% if sort == 'newest' %}selected{% endif %}>Newest first</option>
+      <option value="oldest"     {% if sort == 'oldest' %}selected{% endif %}>Oldest first</option>
+      <option value="importance" {% if sort == 'importance' %}selected{% endif %}>Importance</option>
+      <option value="confidence" {% if sort == 'confidence' %}selected{% endif %}>Confidence</option>
+    </select>
+  </div>
+
+  <span style="color:var(--border);font-size:.9rem">|</span>
+
+  {# Type filter #}
+  <div style="display:flex;align-items:center;gap:.35rem;font-size:.8rem;color:var(--muted)">
+    <span>Type</span>
+    <select name="type" onchange="this.form.submit()"
+            style="font-size:.8rem;padding:.25rem .5rem;border:1px solid var(--border);
+                   border-radius:.35rem;background:var(--bg2);color:var(--fg);cursor:pointer">
+      <option value=""           {% if not type_filter %}selected{% endif %}>All</option>
+      <option value="opinion"    {% if type_filter == 'opinion' %}selected{% endif %}>Opinion</option>
+      <option value="preference" {% if type_filter == 'preference' %}selected{% endif %}>Preference</option>
+      <option value="belief"     {% if type_filter == 'belief' %}selected{% endif %}>Belief</option>
+      <option value="decision"   {% if type_filter == 'decision' %}selected{% endif %}>Decision</option>
+      <option value="fact"       {% if type_filter == 'fact' %}selected{% endif %}>Fact</option>
+      <option value="observation"{% if type_filter == 'observation' %}selected{% endif %}>Observation</option>
+      <option value="instruction"{% if type_filter == 'instruction' %}selected{% endif %}>Instruction</option>
+      <option value="correction" {% if type_filter == 'correction' %}selected{% endif %}>Correction</option>
+    </select>
+  </div>
+
+  <span style="color:var(--border);font-size:.9rem">|</span>
+
+  {# Visibility filter #}
+  <div style="display:flex;align-items:center;gap:.35rem;font-size:.8rem;color:var(--muted)">
+    <span>Visibility</span>
+    <select name="vis" onchange="this.form.submit()"
+            style="font-size:.8rem;padding:.25rem .5rem;border:1px solid var(--border);
+                   border-radius:.35rem;background:var(--bg2);color:var(--fg);cursor:pointer">
+      <option value=""        {% if not vis_filter %}selected{% endif %}>All</option>
+      <option value="public"  {% if vis_filter == 'public' %}selected{% endif %}>Public</option>
+      <option value="private" {% if vis_filter == 'private' %}selected{% endif %}>Private</option>
+    </select>
+  </div>
+
+  <span style="color:var(--border);font-size:.9rem">|</span>
+
+  {# Contested toggle #}
+  <label style="display:flex;align-items:center;gap:.35rem;font-size:.8rem;color:var(--muted);cursor:pointer">
+    <input type="checkbox" name="contested" value="1"
+           {% if contested_only %}checked{% endif %}
+           onchange="this.form.submit()"
+           style="cursor:pointer">
+    Contested only
+  </label>
+
+  {# Clear filters — only show when anything is active #}
+  {% if type_filter or vis_filter or contested_only or sort != 'newest' %}
+  <a href="{{ url_for('webapp.brain') }}"
+     style="font-size:.78rem;color:var(--accent);text-decoration:none;margin-left:.25rem">
+    Clear filters
+  </a>
+  {% endif %}
+</form>
+
+{# ── Atom table ────────────────────────────────────────────────────────────── #}
 {% if atoms %}
   <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
     <table>
@@ -30,7 +103,7 @@
           <th>Memory</th>
           <th style="width:100px">Type</th>
           <th style="width:70px">Conf</th>
-          <th style="width:85px">Date</th>
+          <th style="width:120px">Date / Time</th>
           <th style="width:95px">Visible to</th>
         </tr>
       </thead>
@@ -68,17 +141,24 @@
       </tbody>
     </table>
   </div>
-  {% if stats.total > 50 %}
-  <p style="font-size:.78rem;color:var(--muted);margin-top:.6rem">Showing 50 of {{ stats.total }} memories, sorted by importance.</p>
+  {% if stats.total > 100 %}
+  <p style="font-size:.78rem;color:var(--muted);margin-top:.6rem">Showing 100 of {{ stats.total }} memories.</p>
+  {% elif atoms | length < stats.total %}
+  <p style="font-size:.78rem;color:var(--muted);margin-top:.6rem">{{ atoms | length }} of {{ stats.total }} shown with current filters.</p>
   {% endif %}
 {% else %}
   <div class="empty" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)">
+    {% if type_filter or vis_filter or contested_only %}
+    <h3>No memories match these filters</h3>
+    <p style="margin:.5rem 0 1.25rem"><a href="{{ url_for('webapp.brain') }}">Clear filters</a> to see all memories.</p>
+    {% else %}
     <h3>Your brain is empty</h3>
     <p style="margin:.5rem 0 1.25rem">Capture your first thought, or connect an AI client to build your memory automatically.</p>
     <div style="display:flex;gap:.75rem;justify-content:center;flex-wrap:wrap">
       <a href="{{ url_for('webapp.capture') }}" class="btn btn-primary">Capture a thought</a>
       <a href="{{ url_for('webapp.settings') }}" class="btn btn-ghost">Connect AI client</a>
     </div>
+    {% endif %}
   </div>
 {% endif %}
 {% endblock %}

@@ -8,11 +8,21 @@ from __future__ import annotations
 
 import os
 
+import markdown as _md
 from flask import Flask
+from markupsafe import Markup
 from flask_login import current_user
 
 from webapp.auth import login_manager
 from webapp.routes import site_bp, _unread_notification_count
+
+
+def _render_markdown(text: str) -> Markup:
+    """Jinja filter: convert markdown to safe HTML."""
+    if not text:
+        return Markup("")
+    html = _md.markdown(text, extensions=["extra"])
+    return Markup(html)
 
 
 def create_app() -> Flask:
@@ -29,6 +39,14 @@ def create_app() -> Flask:
 
     login_manager.init_app(app)
     app.register_blueprint(site_bp)
+    app.jinja_env.filters["md"] = _render_markdown
+
+    # Start background post generation worker (daemon thread, survives across requests)
+    try:
+        from app.post_worker import start_worker
+        start_worker()
+    except Exception:
+        pass
 
     @app.context_processor
     def inject_notifications():

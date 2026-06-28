@@ -133,6 +133,7 @@ class OpenAICompatibleClient:
         return items[0]["embedding"]
 
     def generate_response(self, prompt: str, system: str | None = None, json_mode: bool = False) -> str:
+        import re as _re  # noqa: PLC0415
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -140,6 +141,9 @@ class OpenAICompatibleClient:
         body: dict = {"model": self.chat_model, "messages": messages, "stream": False}
         if json_mode:
             body["response_format"] = {"type": "json_object"}
+            # Disable qwen3/DeepSeek thinking mode — avoids massive think blocks
+            # that eat the full timeout before the JSON even starts.
+            body["think"] = False
         response = requests.post(
             f"{self.base_url}/v1/chat/completions",
             headers=self._headers(),
@@ -158,6 +162,8 @@ class OpenAICompatibleClient:
             raise RuntimeError(
                 "OpenAI-compat chat response has non-string content"
             )
+        # Strip <think>...</think> blocks emitted by qwen3/DeepSeek before JSON
+        content = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL).strip()
         return content
 
 

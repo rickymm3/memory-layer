@@ -1,13 +1,10 @@
 #!/bin/bash
 # Stop hook — fires when Claude finishes a response turn.
 #
-# PRIMARY path: automatically extract memories from the last turn by reading
-# the session JSONL and running the extraction pipeline. No model cooperation
-# needed — this runs as a background process and writes atoms silently.
-#
-# FALLBACK path: if the session is initialized but model didn't write AND
-# auto-extraction also produced nothing, block once and ask the model to
-# evaluate the turn manually (2-retry cap).
+# Auto-extraction runs in background as a safety net but does NOT bypass the
+# model-cooperation block. The model is expected to call memory_store_auto
+# directly for any turn with preferences, corrections, decisions, or instructions.
+# Block fires up to 2 times to push model cooperation; then passes silently.
 
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('session_id') or '')" 2>/dev/null)
@@ -28,10 +25,10 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"
 if [ -n "$PROJECT_DIR" ] && [ -f "$PROJECT_DIR/.env" ]; then
     JSONL_PATH="$HOME/.claude/projects/-home-ricky-memory-layer/${SESSION_ID}.jsonl"
     if [ -f "$JSONL_PATH" ]; then
+        # Background safety net — does NOT pre-mark wrote-this-turn so the
+        # model-cooperation block still fires when the model didn't write.
         "$PROJECT_DIR/.venv/bin/python3" "$PROJECT_DIR/scripts/auto_extract_turn.py" \
             "$JSONL_PATH" --user "rickymm3" >> /tmp/memory-auto-extract.log 2>&1 &
-        # Mark write so the fallback block doesn't fire for this turn
-        touch "${MARKER_DIR}/${SESSION_ID}.wrote-this-turn"
     fi
 fi
 
@@ -67,9 +64,11 @@ import json
 print(json.dumps({
     'decision': 'block',
     'reason': (
-        'Auto-extraction could not run (JSONL not found or project dir missing). '
-        'Call memory_store_auto manually if this turn contained preferences, '
-        'corrections, decisions, or instructions. '
+        'This turn had no memory_store_auto call. '
+        'If the user expressed a preference, correction, decision, or instruction, '
+        'call memory_store_auto now. '
+        'If genuinely nothing to store, call it with a brief acknowledgement or '
+        'respond to acknowledge and this block will clear on the next turn. '
         'Scope: project facts -> \"project:memory-layer\", '
         'model observations -> \"model:claude-sonnet-4-6\", '
         'user preferences -> \"user\".'

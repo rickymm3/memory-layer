@@ -61,7 +61,15 @@ _CRITIC_SYSTEM = (
     "wrong facts reveal user beliefs, vague content reveals uncertainty, ephemeral "
     "content reveals temporal context. You reject ONLY secrets/credentials and "
     "incoherent noise. Everything else is stored with appropriate type and confidence. "
-    "Return STRICT JSON only — no markdown, no explanation outside the JSON object."
+    "Return STRICT JSON only — no markdown, no explanation outside the JSON object.\n\n"
+    "CRITICAL — entity-level fact preservation: When content contains specific facts "
+    "about a novel entity the user created, built, or described in detail (a game, app, "
+    "product, personal project, creative work) — preserve ALL concrete details verbatim "
+    "in final_memory_text. Names, numbers, rules, mechanics, specifications, playtesting "
+    "observations must survive extraction intact. Do NOT compress 'The game has 4 resource "
+    "types: wood, stone, gold, influence, designed for 2-4 players, 45-90 min sessions' "
+    "into 'The game has resource management.' Abstraction destroys the only knowledge "
+    "source for things not in any training data. Set memory_type=fact, confidence >= 0.85."
 )
 
 
@@ -206,7 +214,10 @@ def _build_critic_prompt(
         '  "scope": "<scope or null>",\n'
         '  "confidence": <0.0-1.0>,\n'
         '  "critic_notes": ["<note>"],\n'
-        '  "context_summary": "<1-2 sentences: when and why this fact is relevant>",\n'
+        '  "context_summary": "<1-2 sentences: when and why this fact is relevant. '
+        'End with a tone tag capturing the energy of the source conversation — '
+        'e.g. [tone:enthusiastic] [tone:playful] [tone:technical] [tone:frustrated] '
+        '[tone:reflective] [tone:casual] [tone:analytical]. Pick the one that best fits.>",\n'
         '  "rejection_reason": null,\n'
         '  "novelty_score": <0.0-1.0>,\n'
         '  "interest_flag": <true|false>,\n'
@@ -218,11 +229,13 @@ def _build_critic_prompt(
         "suggested_visibility rules (STRICT):\n"
         '  "private" — content contains ANY of: passwords, API keys, tokens, credentials, '
         "personal health/medical info, home addresses, private financial details, "
-        "identifiable personal data about a named individual, internal secrets.\n"
-        '  "public" — everything else: facts, decisions, opinions, architectural choices, '
-        "general knowledge, beliefs about the world, project patterns, observations about tools or models.\n"
-        "When in doubt, prefer public. The caller's requested visibility is overridden only when "
-        "you detect genuinely sensitive content that must stay private."
+        "a private individual's full name combined with any contact detail / location / medical / financial info, "
+        "internal secrets, or direct personal disclosures the user clearly did not intend to share.\n"
+        '  "public" — everything else: facts, opinions, decisions, beliefs about the world, '
+        "architectural choices, general knowledge, project patterns, observations about tools, "
+        "references to public figures, and philosophical or conceptual ideas — even if they mention a name.\n"
+        "Default is public. Override to private ONLY when the content is clearly sensitive. "
+        "A mention of a person's name is NOT enough — it must also expose personal details."
     )
 
 
@@ -376,10 +389,15 @@ def _apply_risk_gate(
 # ── Visibility resolver ───────────────────────────────────────────────────────
 
 def _effective_visibility(caller_visibility: str, critic: dict) -> str:
-    """Critic can force private for sensitive content; otherwise caller wins."""
+    """Critic can force private for sensitive content; otherwise caller wins.
+
+    The critic's 'private' verdict is the only override — it catches passwords,
+    PII, and sensitive personal details even when the caller requests public.
+    Everything else defers to the caller; default is now public.
+    """
     if critic.get("suggested_visibility") == "private":
         return "private"
-    return caller_visibility or "private"
+    return caller_visibility or "public"
 
 
 # ── Pipeline class ────────────────────────────────────────────────────────────
@@ -412,7 +430,7 @@ class MemoryCommitPipeline:
         source_key: str = "local_user",
         source_type: str = "local",
         source_user_id: str | None = None,
-        visibility: str = "private",
+        visibility: str = "public",
     ) -> CommitDecision:
         """Run a candidate through the full commit pipeline.
 
@@ -637,6 +655,12 @@ class MemoryCommitPipeline:
                             )
                             if sup.get("updated"):
                                 supersedes_ids.append(old_id)
+                                # Weight shifted: re-queue any posts that cited this atom
+                                try:
+                                    from app.post_worker import requeue_posts_for_atom as _rpfa  # noqa: PLC0415
+                                    _rpfa(old_id)
+                                except Exception:
+                                    pass
                         except Exception:
                             pass
                     refines_ids = list(matched_ids)
@@ -832,11 +856,38 @@ class MemoryCommitPipeline:
                 pass  # discussion status advancement is non-fatal
 
         # ── Post-write trigger (background, non-blocking) ────────────────────
-        # When a new atom is committed, check two things:
-        # 1. Does it qualify for draft generation (public + confidence*importance threshold)?
-        # 2. Are there related discussions the originating user should know about?
-        # Both run async so the commit pipeline itself never slows down.
+        # When a new atom is committed:
+        # 1. Enqueue it for background post generation (no visibility gate — worker generates drafts)
+        # 2. Check for related discussions the user should know about
+        # Both are async so the commit pipeline itself never slows down.
         if final_decision in ("commit", "refine_existing") and committed_atom_id:
+            try:
+                from app.post_worker import enqueue as _enqueue_post  # noqa: PLC0415
+                import os as _os
+                import psycopg as _psycopg
+                _db_url = _os.environ.get("DATABASE_URL", "")
+                _scope = None
+                _visibility = None
+                if _db_url:
+                    with _psycopg.connect(_db_url) as _c:
+                        with _c.cursor() as _cur:
+                            _cur.execute(
+                                "SELECT scope, visibility FROM memory_atoms WHERE id = %s",
+                                (committed_atom_id,),
+                            )
+                            _row = _cur.fetchone()
+                            if _row:
+                                _scope, _visibility = _row
+                # Public = enqueue. That's the full gate.
+                # The LLM reads the atom cluster + related embeddings and
+                # decides what becomes a post. We do not pre-filter by type,
+                # score, or scope — that is classification work the LLM does
+                # better than we can. Private (CLI) atoms never generate posts.
+                _should_enqueue = _visibility == "public"
+                if _should_enqueue:
+                    _enqueue_post(committed_atom_id, source_user_id or "local_user", _scope)
+            except Exception:
+                pass
             try:
                 import threading as _threading
                 _threading.Thread(
@@ -881,31 +932,11 @@ def _post_commit_trigger(atom_id: str, source_user_id: str | None) -> None:
             return
 
         content, mtype, scope, visibility, confidence, importance, topic_tags, interest_flag, novelty_score = row
-        confidence = float(confidence or 0.0)
-        importance = float(importance or 0.0)
-        novelty_score = float(novelty_score or 0.0)
 
-        # 1. Draft generation gate — public atoms above threshold OR flagged as novel/high-interest.
-        # interest_flag bypasses the score gate so genuinely novel ideas surface immediately
-        # even before they've accumulated confidence through signal aggregation.
-        PUBLISH_THRESHOLD = 0.65
-        qualifies = visibility == "public" and (
-            (confidence * importance) >= PUBLISH_THRESHOLD or bool(interest_flag)
-        )
-        if qualifies:
-            try:
-                from app.article_generator import _has_recent_draft_for_tags, generate_draft
-                # Dedup: skip if user already has a recent draft covering the same topic tags.
-                if not _has_recent_draft_for_tags(source_user_id, topic_tags):
-                    result = generate_draft(atom_ids=[atom_id], author_username=source_user_id or "local_user")
-                    if result:
-                        _log.info("post_commit_trigger: draft created %s for atom %s", result.get("id"), atom_id)
-                else:
-                    _log.debug("post_commit_trigger: skipped draft for atom %s — recent draft covers same tags", atom_id)
-            except Exception as exc:
-                _log.debug("post_commit_trigger: draft generation failed (non-fatal): %s", exc)
+        # Draft generation is now handled by the post_worker queue (enqueued above).
+        # This trigger only handles the related-discussion alert.
 
-        # 2. Related-discussion alert — notify originating user if others have discussed this topic
+        # Related-discussion alert — notify originating user if others have discussed this topic
         if source_user_id and topic_tags:
             try:
                 with psycopg.connect(db_url) as conn:

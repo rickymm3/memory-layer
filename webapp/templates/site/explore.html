@@ -16,7 +16,7 @@
 
     {% if discussions %}
       {% for d in discussions %}
-      <a href="{{ url_for('webapp.discussion_detail', disc_id=d.id) }}" class="disc-card">
+      <a href="{{ url_for('webapp.post_detail', post_ref=d.slug or d.id) }}" class="disc-card">
         <div style="display:flex;align-items:flex-start;gap:.75rem">
           <div style="flex:1;min-width:0">
             <div class="disc-card-title">

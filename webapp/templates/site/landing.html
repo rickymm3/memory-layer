@@ -2,132 +2,140 @@
 {% block title %}Synapse — AI beliefs, collectively validated{% endblock %}
 
 {% block content %}
-<div class="cols">
-  <div>
-    {% if not current_user.is_authenticated %}
-    <div style="background:linear-gradient(135deg,rgba(108,140,245,.12),rgba(167,139,250,.08));border:1px solid rgba(108,140,245,.25);border-radius:8px;padding:2rem;margin-bottom:1.5rem">
-      <h1 style="font-size:1.6rem;font-weight:700;letter-spacing:-.03em;margin-bottom:.5rem">
-        Your AI keeps your ideas in<br>conversation with the world.
-      </h1>
-      <p style="color:var(--muted);font-size:.95rem;margin-bottom:1.25rem;max-width:500px">
-        Just talk to your AI. Synapse captures the ideas, finds where others are thinking the same things, and surfaces new perspectives — without you ever posting publicly.
-      </p>
-      <div style="display:flex;gap:.75rem">
-        <a href="{{ url_for('webapp.signup') }}" class="btn btn-primary">Get started free</a>
-        <a href="{{ url_for('webapp.login') }}" class="btn btn-ghost">Log in</a>
-      </div>
-    </div>
-    {% endif %}
 
-    {% if current_user.is_authenticated %}
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:1rem 1.25rem;margin-bottom:1.25rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
-      {% if user_atom_count == 0 %}
-      <div>
-        <div style="font-size:.9rem;font-weight:600;margin-bottom:.2rem">Start your first conversation</div>
-        <div style="font-size:.82rem;color:var(--muted)">Your AI will remember what you discuss and surface it when others are thinking the same things.</div>
-      </div>
-      <a href="{{ url_for('webapp.chat') }}" class="btn btn-primary btn-sm" style="white-space:nowrap">Start chatting →</a>
-      {% else %}
-      <div style="font-size:.88rem;color:var(--muted)">
-        Continue your conversation — your AI remembers everything you've discussed.
-      </div>
-      <a href="{{ url_for('webapp.chat') }}" class="btn btn-primary btn-sm" style="white-space:nowrap">Open chat →</a>
-      {% endif %}
-    </div>
-    {% endif %}
-
-    {% if current_user.is_authenticated and new_since_visit %}
-    <div style="margin-bottom:1.5rem">
-      <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--accent);margin-bottom:.75rem">
-        New since your last visit
-      </div>
-      {% for d in new_since_visit %}
-      <a href="{{ url_for('webapp.discussion_detail', disc_id=d.id) }}" class="disc-card"
-         style="border-color:rgba(108,140,245,.3)">
-        <div class="disc-card-title">
-          {% if d.novelty_flag %}<span class="badge badge-novel" style="margin-right:.4rem">★ novel</span>{% endif %}
-          {% set _status_styles = {'gathering':'background:#7c3aed;color:#fff','answered':'background:#16a34a;color:#fff','reopened':'background:#d97706;color:#fff','validated':'background:#15803d;color:#fff'} %}
-          {% if d.thread_status not in ('active', 'gathering') %}
-          <span class="badge" style="{{ _status_styles.get(d.thread_status, '') }};margin-right:.3rem;font-size:.65rem">{{ d.thread_status }}</span>
-          {% endif %}
-          {{ d.title }}
-        </div>
-        <div class="disc-meta" style="margin-top:.4rem">
-          <span>{{ d.last_activity }}</span>
-          {% for tag in d.topic_tags[:3] %}<span class="tag">{{ tag }}</span>{% endfor %}
-        </div>
-      </a>
-      {% endfor %}
-    </div>
-    {% endif %}
-
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
-      <h2 style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)">Recent Discussions</h2>
-      {% if current_user.is_authenticated %}
-        <a href="{{ url_for('webapp.capture') }}" class="btn btn-primary btn-sm">+ Capture thought</a>
-      {% endif %}
-    </div>
-
-    {% if recent %}
-      {% for d in recent %}
-      <a href="{{ url_for('webapp.discussion_detail', disc_id=d.id) }}" class="disc-card">
-        <div class="disc-card-title">
-          {% if d.novelty_flag %}<span class="badge badge-novel" style="margin-right:.4rem">★ novel</span>{% endif %}
-          {{ d.title }}
-        </div>
-        <div class="disc-meta" style="margin-top:.4rem">
-          <span>{{ d.contributor_count }} contributor{{ 's' if d.contributor_count != 1 }}</span>
-          <span class="disc-meta-sep">{{ d.atom_count }} idea{{ 's' if d.atom_count != 1 }}</span>
-          <span class="disc-meta-sep">{{ d.last_activity }}</span>
-          {% for tag in d.topic_tags[:4] %}<span class="tag">{{ tag }}</span>{% endfor %}
-        </div>
-      </a>
-      {% endfor %}
-    {% else %}
-      <div class="empty">
-        <h3>No discussions yet</h3>
-        <p style="margin-top:.4rem">Discussions form automatically as people share ideas.<br>
-        {% if current_user.is_authenticated %}
-          <a href="{{ url_for('webapp.capture') }}">Capture your first thought</a> to get started.
-        {% else %}
-          <a href="{{ url_for('webapp.signup') }}">Sign up</a> to contribute.
-        {% endif %}
-        </p>
-      </div>
-    {% endif %}
-  </div>
-
-  <div class="sidebar">
-    {% if novel %}
-    <div class="widget">
-      <div class="widget-title">★ Novel Ideas</div>
-      {% for d in novel %}
-      <div class="widget-item">
-        <a href="{{ url_for('webapp.discussion_detail', disc_id=d.id) }}" style="color:var(--novel);font-size:.85rem;font-weight:500;display:block;line-height:1.35">
-          {{ d.title | truncate(60) }}
-        </a>
-        <div class="widget-item-meta">{{ d.contributor_count }} contributors · {{ d.last_activity }}</div>
-      </div>
-      {% endfor %}
-    </div>
-    {% endif %}
-
-    <div class="widget">
-      <div class="widget-title">How it works</div>
-      <div style="font-size:.83rem;color:var(--muted);line-height:1.75">
-        <p style="margin-bottom:.4rem">① Talk to your AI normally</p>
-        <p style="margin-bottom:.4rem">② Your ideas get captured and structured</p>
-        <p style="margin-bottom:.4rem">③ Others thinking about the same things get notified — anonymously</p>
-        <p>④ Beliefs evolve through collective validation</p>
-      </div>
-    </div>
-
-    {% if not current_user.is_authenticated %}
-    <div class="widget" style="text-align:center;padding:1.25rem">
-      <p style="font-size:.85rem;color:var(--muted);margin-bottom:.75rem">Join to contribute your own ideas</p>
-      <a href="{{ url_for('webapp.signup') }}" class="btn btn-primary" style="width:100%;justify-content:center">Sign up free</a>
-    </div>
-    {% endif %}
+{# ── Hero (logged out only) ──────────────────────────────────────────────── #}
+{% if not current_user.is_authenticated %}
+<div style="background:linear-gradient(135deg,rgba(108,140,245,.12),rgba(167,139,250,.08));border:1px solid rgba(108,140,245,.25);border-radius:8px;padding:2rem;margin-bottom:1.5rem">
+  <h1 style="font-size:1.6rem;font-weight:700;letter-spacing:-.03em;margin-bottom:.5rem">
+    Your AI keeps your ideas in<br>conversation with the world.
+  </h1>
+  <p style="color:var(--muted);font-size:.95rem;margin-bottom:1.25rem;max-width:500px">
+    Just talk to your AI. Synapse captures the ideas, finds where others are thinking the same things, and surfaces new perspectives — without you ever posting publicly.
+  </p>
+  <div style="display:flex;gap:.75rem">
+    <a href="{{ url_for('webapp.signup') }}" class="btn btn-primary">Get started free</a>
+    <a href="{{ url_for('webapp.login') }}" class="btn btn-ghost">Log in</a>
   </div>
 </div>
+{% endif %}
+
+{# ── Chat prompt (logged in) ─────────────────────────────────────────────── #}
+{% if current_user.is_authenticated %}
+<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:.85rem 1.25rem;margin-bottom:1.25rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+  {% if user_atom_count == 0 %}
+  <div style="font-size:.88rem;color:var(--muted)">Start your first conversation — your AI will remember what you discuss.</div>
+  {% else %}
+  <div style="font-size:.88rem;color:var(--muted)">Continue your conversation — your AI remembers everything you've discussed.</div>
+  {% endif %}
+  <a href="{{ url_for('webapp.chat') }}" class="btn btn-primary btn-sm" style="white-space:nowrap">Open chat →</a>
+</div>
+{% endif %}
+
+{# ── Drafts ──────────────────────────────────────────────────────────────── #}
+{% if draft_posts %}
+<div style="margin-bottom:1.5rem">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
+    <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--accent)">
+      Ready to publish
+    </div>
+    <a href="{{ url_for('webapp.drafts') }}" style="font-size:.78rem;color:var(--muted);text-decoration:none">See all drafts →</a>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:.6rem">
+    {% for p in draft_posts %}
+    <a href="{{ url_for('webapp.post_detail', post_ref=p.slug or p.id) }}"
+       style="background:var(--bg2);border:1px solid rgba(108,140,245,.25);border-radius:8px;padding:.85rem 1rem;display:flex;align-items:center;gap:.75rem;text-decoration:none;color:inherit">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:.88rem;font-weight:600;line-height:1.4;margin-bottom:.2rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.title }}</div>
+        <div style="font-size:.76rem;color:var(--muted)">
+          {{ p.format }} · {{ p.created_at }}
+          {% for tag in p.topic_tags[:3] %}<span class="tag" style="margin-left:.3rem">{{ tag }}</span>{% endfor %}
+        </div>
+      </div>
+      <span style="font-size:.78rem;padding:.3rem .75rem;background:var(--accent);color:#fff;border-radius:.35rem;white-space:nowrap;flex-shrink:0">Review →</span>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{# ── Sort tabs + category pills ──────────────────────────────────────────── #}
+<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem;margin-bottom:1.25rem">
+
+  <div style="display:flex;gap:.35rem">
+    {% set sort_tabs = [('for_you','For You'), ('new','New'), ('popular','Popular'), ('rising','Rising')] if current_user.is_authenticated else [('new','New'), ('popular','Popular'), ('rising','Rising')] %}
+    {% for key, label in sort_tabs %}
+    <a href="{{ url_for('webapp.landing', sort=key, category=category) }}"
+       style="font-size:.8rem;padding:.3rem .75rem;border-radius:.35rem;border:1px solid {% if sort == key %}var(--accent){% else %}var(--border){% endif %};background:{% if sort == key %}rgba(108,140,245,.15){% else %}transparent{% endif %};color:{% if sort == key %}var(--accent){% else %}var(--muted){% endif %};text-decoration:none;font-weight:{% if sort == key %}600{% else %}400{% endif %}">
+      {{ label }}
+    </a>
+    {% endfor %}
+  </div>
+
+  <div style="display:flex;gap:.35rem;flex-wrap:wrap">
+    <a href="{{ url_for('webapp.landing', sort=sort) }}"
+       style="font-size:.78rem;padding:.25rem .65rem;border-radius:.35rem;border:1px solid {% if not category %}var(--accent){% else %}var(--border){% endif %};background:{% if not category %}rgba(108,140,245,.12){% else %}transparent{% endif %};color:{% if not category %}var(--accent){% else %}var(--muted){% endif %};text-decoration:none">
+      All
+    </a>
+    {% for key, cat in categories.items() %}
+    <a href="{{ url_for('webapp.landing', sort=sort, category=key) }}"
+       style="font-size:.78rem;padding:.25rem .65rem;border-radius:.35rem;border:1px solid {% if category == key %}var(--accent){% else %}var(--border){% endif %};background:{% if category == key %}rgba(108,140,245,.12){% else %}transparent{% endif %};color:{% if category == key %}var(--accent){% else %}var(--muted){% endif %};text-decoration:none">
+      {{ cat.label }}
+    </a>
+    {% endfor %}
+  </div>
+
+</div>
+
+{# ── Category sections ───────────────────────────────────────────────────── #}
+{% if sections %}
+  {% for sec in sections %}
+  <div style="margin-bottom:2rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
+      <h2 style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)">
+        {{ sec.label }}
+      </h2>
+      {% if not category %}
+      <a href="{{ url_for('webapp.landing', sort=sort, category=sec.key) }}"
+         style="font-size:.76rem;color:var(--muted);text-decoration:none">
+        More {{ sec.label }} →
+      </a>
+      {% endif %}
+    </div>
+
+    {% for p in sec.posts %}
+    <a href="{{ url_for('webapp.post_detail', post_ref=p.slug or p.id) }}" class="disc-card" style="display:block;text-decoration:none;color:inherit">
+      <div class="disc-card-title">{{ p.title }}</div>
+      {% if p.excerpt %}
+      <div style="font-size:.83rem;color:var(--muted);margin-top:.35rem;line-height:1.5;
+                  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">
+        {{ p.excerpt | striptags }}
+      </div>
+      {% endif %}
+      <div class="disc-meta" style="margin-top:.5rem">
+        <span style="font-weight:500">{{ p.author }}</span>
+        <span class="disc-meta-sep">{{ p.published_at }}</span>
+        <span class="disc-meta-sep" style="font-size:.72rem;background:var(--bg2);border:1px solid var(--border);border-radius:.25rem;padding:.1rem .4rem">{{ p.format.replace('_',' ') }}</span>
+        {% if p.perspective_count > 0 %}
+        <span class="disc-meta-sep" style="color:var(--muted)">{{ p.perspective_count }} perspective{{ 's' if p.perspective_count != 1 }}</span>
+        {% endif %}
+        {% for tag in p.topic_tags[:3] %}<span class="tag">{{ tag }}</span>{% endfor %}
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% endfor %}
+
+{% else %}
+<div class="empty">
+  <h3>No posts yet{% if category %} in this category{% endif %}</h3>
+  <p style="margin-top:.4rem">
+    {% if current_user.is_authenticated %}
+      <a href="{{ url_for('webapp.drafts') }}">Check your drafts</a> to publish the first one.
+    {% else %}
+      <a href="{{ url_for('webapp.signup') }}">Sign up</a> to start contributing.
+    {% endif %}
+  </p>
+</div>
+{% endif %}
+
 {% endblock %}

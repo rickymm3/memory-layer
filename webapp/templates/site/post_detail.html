@@ -1,25 +1,22 @@
 {% extends "site/base.html" %}
-{% block title %}{{ post.title }} — memoryLayer{% endblock %}
+{% block title %}{{ post.title }} — Synapse{% endblock %}
 
 {% block head %}
 <style>
-  .post-body { line-height: 1.7; }
-  .post-body h1, .post-body h2, .post-body h3 { margin-top: 1.5rem; }
-  .post-body pre { background: var(--pico-muted-background); padding: 1rem; border-radius: .4rem; overflow-x: auto; }
-  .post-body code { background: var(--pico-muted-background); padding: .1em .3em; border-radius: .2em; font-size: .88em; }
-  .contributor-chip {
-    display: inline-flex; align-items: center; gap: .35rem;
-    background: var(--pico-muted-background);
-    border: 1px solid var(--pico-muted-border-color);
-    border-radius: 2rem; padding: .2rem .6rem;
-    font-size: .8rem;
-  }
+  .post-body { line-height: 1.75; }
+  .post-body p { margin-bottom: 1rem; }
+  .post-body h2, .post-body h3 { margin-top: 1.75rem; margin-bottom: .5rem; }
+  .post-body pre { background: var(--bg2); padding: 1rem; border-radius: .4rem; overflow-x: auto; }
+  .post-body code { background: var(--bg2); padding: .1em .3em; border-radius: .2em; font-size: .88em; }
+  .post-body ul, .post-body ol { padding-left: 1.5rem; margin: .75rem 0; }
+  .post-body li { margin-bottom: .35rem; }
+  .post-body strong { color: var(--fg); }
 </style>
 {% endblock %}
 
 {% block content %}
 <div style="margin-bottom:1rem">
-  <a href="{{ url_for('webapp.feed') }}" style="font-size:.85rem;color:var(--pico-muted-color)">← Feed</a>
+  <a href="{{ url_for('webapp.feed') }}" style="font-size:.85rem;color:var(--muted)">← Feed</a>
 </div>
 
 <header style="margin-bottom:2rem">
@@ -30,52 +27,240 @@
     {% endif %}
   </div>
   <h1 style="font-size:1.8rem;margin:.25rem 0 .5rem">{{ post.title }}</h1>
-  <div style="font-size:.85rem;color:var(--pico-muted-color);display:flex;gap:1rem;flex-wrap:wrap">
+  <div style="font-size:.85rem;color:var(--muted);display:flex;gap:1rem;flex-wrap:wrap">
     <span>by {{ post.author }}</span>
     {% if post.published_at %}<span>{{ post.published_at }}</span>{% endif %}
-    {% if post.confidence %}<span>{{ "%.0f%%" | format(post.confidence * 100) }} confidence</span>{% endif %}
+    {% if post.perspective_count > 0 %}
+      <span>{{ post.perspective_count }} perspective{{ 's' if post.perspective_count != 1 }}</span>
+    {% endif %}
   </div>
   {% if post.topic_tags %}
     <div style="margin-top:.6rem;display:flex;gap:.4rem;flex-wrap:wrap">
       {% for tag in post.topic_tags %}
         <a href="{{ url_for('webapp.feed', tag=tag) }}"
-           style="font-size:.78rem;color:var(--pico-muted-color);text-decoration:none">#{{ tag }}</a>
+           style="font-size:.78rem;color:var(--muted);text-decoration:none">#{{ tag }}</a>
       {% endfor %}
     </div>
   {% endif %}
 </header>
 
-<div class="post-body">{{ post.body | safe }}</div>
-
-{% if contributors %}
-  <hr style="margin:2rem 0">
-  <section>
-    <h3 style="font-size:.9rem;font-weight:700;margin-bottom:.75rem;color:var(--pico-muted-color)">CONTRIBUTORS</h3>
-    <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-      {% for c in contributors %}
-        <span class="contributor-chip">
-          <span>{{ c.username }}</span>
-          <span style="color:var(--pico-muted-color);font-size:.72em">{{ c.type }}</span>
-        </span>
-      {% endfor %}
-    </div>
-  </section>
-{% endif %}
+<div class="post-body">{{ post.body | md }}</div>
 
 {% if current_user.is_authenticated and post.author == current_user.username and post.status == 'draft' %}
   <hr style="margin:2rem 0">
   <div style="display:flex;gap:.75rem">
     <form method="post" action="{{ url_for('webapp.publish_post', post_id=post.id) }}">
-      <button type="submit" style="background:var(--pico-primary);color:#fff;border:none;padding:.5rem 1.2rem;border-radius:.4rem;cursor:pointer;font-weight:600">
+      <button type="submit" style="background:var(--accent);color:#fff;border:none;padding:.5rem 1.2rem;border-radius:.4rem;cursor:pointer;font-weight:600">
         Publish
       </button>
     </form>
     <form method="post" action="{{ url_for('webapp.discard_post', post_id=post.id) }}"
           onsubmit="return confirm('Discard this draft?')">
-      <button type="submit" style="background:none;border:1px solid var(--pico-muted-border-color);padding:.5rem 1rem;border-radius:.4rem;cursor:pointer">
+      <button type="submit" style="background:none;border:1px solid var(--border);padding:.5rem 1rem;border-radius:.4rem;cursor:pointer">
         Discard
       </button>
     </form>
   </div>
 {% endif %}
+
+{# ── Reactions ────────────────────────────────────────────────────────────── #}
+{% if current_user.is_authenticated and post.status == 'published' %}
+<div style="display:flex;gap:.5rem;margin:1.75rem 0 0">
+  <form method="post" action="{{ url_for('webapp.post_react', post_id=post.id) }}">
+    <input type="hidden" name="vote" value="up">
+    <button type="submit"
+            title="This resonates"
+            style="background:{% if user_vote == 'up' %}rgba(108,140,245,.18){% else %}transparent{% endif %};
+                   border:1px solid {% if user_vote == 'up' %}rgba(108,140,245,.5){% else %}var(--border){% endif %};
+                   border-radius:.4rem;padding:.35rem .65rem;cursor:pointer;
+                   font-size:.95rem;color:{% if user_vote == 'up' %}var(--accent){% else %}var(--muted){% endif %};
+                   line-height:1;transition:all .15s">
+      ↑
+    </button>
+  </form>
+  <form method="post" action="{{ url_for('webapp.post_react', post_id=post.id) }}">
+    <input type="hidden" name="vote" value="down">
+    <button type="submit"
+            title="Not for me"
+            style="background:{% if user_vote == 'down' %}rgba(200,80,80,.1){% else %}transparent{% endif %};
+                   border:1px solid {% if user_vote == 'down' %}rgba(200,80,80,.4){% else %}var(--border){% endif %};
+                   border-radius:.4rem;padding:.35rem .65rem;cursor:pointer;
+                   font-size:.95rem;color:{% if user_vote == 'down' %}#c85050{% else %}var(--muted){% endif %};
+                   line-height:1;transition:all .15s">
+      ↓
+    </button>
+  </form>
+</div>
+{% endif %}
+
+{# ── AI Responses ─────────────────────────────────────────────────────────── #}
+{% if ai_responses or has_pending_perspective %}
+<hr style="margin:2.5rem 0 2rem">
+<section>
+  <h2 style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-bottom:1.25rem">
+    Responses from the Collective
+    {% if ai_responses %}
+    <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.76rem;margin-left:.5rem">{{ ai_responses | length }} viewpoint{{ 's' if ai_responses | length != 1 }}</span>
+    {% endif %}
+  </h2>
+
+  {% if has_pending_perspective %}
+  <div id="pending-response-card"
+       style="background:var(--bg2);border:1px dashed var(--border);border-radius:.5rem;
+              padding:1rem 1.15rem;margin-bottom:.75rem">
+    {% if pending_perspective_body %}
+    <p style="font-size:.88rem;line-height:1.7;color:var(--fg);margin:0 0 .75rem;
+              white-space:pre-wrap">{{ pending_perspective_body }}</p>
+    {% endif %}
+    <div style="display:flex;align-items:center;gap:.6rem">
+      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0;
+                   background:var(--accent);animation:pulse 1.4s ease-in-out infinite"></span>
+      <span style="font-size:.78rem;color:var(--muted)">
+        Processing — your response will be woven into the discussion below.
+        <span id="pending-countdown" style="opacity:.6"></span>
+      </span>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var reloadIn = 35;
+      var el = document.getElementById('pending-countdown');
+      var iv = setInterval(function() {
+        reloadIn--;
+        if (el) el.textContent = '(refreshing in ' + reloadIn + 's)';
+        if (reloadIn <= 0) { clearInterval(iv); window.location.reload(); }
+      }, 1000);
+    })();
+  </script>
+  <style>
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: .4; transform: scale(.85); }
+    }
+  </style>
+  {% endif %}
+
+  {% for resp in ai_responses %}
+  <div style="background:var(--bg2);border:1px solid
+    {% if resp.kind == 'dispute' %}rgba(200,80,80,.25)
+    {% elif resp.kind == 'addition' %}rgba(80,180,120,.2)
+    {% else %}var(--border){% endif %};
+    border-radius:.5rem;padding:1rem 1.15rem;margin-bottom:.75rem">
+    <div style="margin-bottom:.5rem">
+      {% if resp.kind == 'dispute' %}
+      <span style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;
+                   color:#c85050;background:rgba(200,80,80,.1);border-radius:.25rem;
+                   padding:.15rem .45rem">Challenge</span>
+      {% elif resp.kind == 'addition' %}
+      <span style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;
+                   color:#3a9e6a;background:rgba(80,180,120,.1);border-radius:.25rem;
+                   padding:.15rem .45rem">New angle</span>
+      {% else %}
+      <span style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;
+                   color:var(--accent);background:rgba(108,140,245,.1);border-radius:.25rem;
+                   padding:.15rem .45rem">Synthesis</span>
+      {% endif %}
+    </div>
+    <p style="font-size:.88rem;line-height:1.7;color:var(--fg);margin:0 0 .75rem">{{ resp.body }}</p>
+    {% if current_user.is_authenticated and post.status == 'published' %}
+    <div style="display:flex;gap:.4rem">
+      <form method="post" action="{{ url_for('webapp.response_react', response_id=resp.id) }}" style="display:inline">
+        <input type="hidden" name="vote" value="up">
+        <input type="hidden" name="post_id" value="{{ post.id }}">
+        <button type="submit"
+                title="This resonates"
+                style="background:{% if resp.user_vote == 'up' %}rgba(108,140,245,.18){% else %}transparent{% endif %};
+                       border:1px solid {% if resp.user_vote == 'up' %}rgba(108,140,245,.5){% else %}var(--border){% endif %};
+                       border-radius:.35rem;padding:.2rem .55rem;cursor:pointer;
+                       font-size:.85rem;color:{% if resp.user_vote == 'up' %}var(--accent){% else %}var(--muted){% endif %};
+                       line-height:1;transition:all .15s">↑</button>
+      </form>
+      <form method="post" action="{{ url_for('webapp.response_react', response_id=resp.id) }}" style="display:inline">
+        <input type="hidden" name="vote" value="down">
+        <input type="hidden" name="post_id" value="{{ post.id }}">
+        <button type="submit"
+                title="Not convinced"
+                style="background:{% if resp.user_vote == 'down' %}rgba(200,80,80,.1){% else %}transparent{% endif %};
+                       border:1px solid {% if resp.user_vote == 'down' %}rgba(200,80,80,.4){% else %}var(--border){% endif %};
+                       border-radius:.35rem;padding:.2rem .55rem;cursor:pointer;
+                       font-size:.85rem;color:{% if resp.user_vote == 'down' %}#c85050{% else %}var(--muted){% endif %};
+                       line-height:1;transition:all .15s">↓</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{# ── Consensus (summary) ──────────────────────────────────────────────────── #}
+{% if post.consensus_body and not ai_responses %}
+<hr style="margin:2.5rem 0 2rem">
+<section>
+  <h2 style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-bottom:1.25rem">
+    Community Consensus
+    {% if post.consensus_updated_at %}
+      <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.76rem;margin-left:.5rem;color:var(--muted)">· updated {{ post.consensus_updated_at }}</span>
+    {% endif %}
+  </h2>
+  <div class="post-body" style="border-left:3px solid rgba(108,140,245,.3);padding-left:1.25rem">
+    {{ post.consensus_body | md }}
+  </div>
+</section>
+{% endif %}
+
+{# ── Contribute ───────────────────────────────────────────────────────────── #}
+{% if post.status == 'published' %}
+<hr style="margin:2.5rem 0 2rem">
+<section>
+  {% if current_user.is_authenticated %}
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:.5rem;padding:1.25rem">
+    <div style="font-size:.82rem;font-weight:600;margin-bottom:.3rem">Add to the conversation</div>
+    <div style="font-size:.76rem;color:var(--muted);margin-bottom:.75rem">
+      Your response is processed by AI and woven into the community viewpoints above.
+      {% if post.perspective_count > 0 %}
+        {{ post.perspective_count }} contributor{{ 's' if post.perspective_count != 1 }} so far.
+      {% endif %}
+    </div>
+    <form method="post" action="{{ url_for('webapp.post_perspective', post_id=post.id) }}">
+      <textarea name="perspective" rows="3"
+                placeholder="What do you think? What angle is missing from the responses above?"
+                style="width:100%;font-size:.88rem;padding:.65rem .8rem;border:1px solid var(--border);border-radius:.4rem;background:var(--bg);color:var(--fg);resize:vertical;margin-bottom:.75rem"></textarea>
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem">
+        <div style="display:flex;align-items:center;gap:.75rem">
+          <a href="{{ url_for('webapp.open_in_claude', post_id=post.id) }}"
+             class="open-claude-link"
+             data-fallback="{{ url_for('webapp.chat') }}?post={{ post.id }}"
+             style="font-size:.78rem;color:var(--accent);text-decoration:none">
+            Open in Claude ↗
+          </a>
+          <a href="{{ url_for('webapp.chat') }}?post={{ post.id }}"
+             style="font-size:.76rem;color:var(--muted);text-decoration:none">
+            in-app chat
+          </a>
+        </div>
+        <button type="submit" style="font-size:.85rem;padding:.45rem 1.1rem;background:var(--accent);color:#fff;border:none;border-radius:.4rem;cursor:pointer;font-weight:500">
+          Submit
+        </button>
+      </div>
+    </form>
+  </div>
+  {% else %}
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:.5rem;padding:1.25rem;text-align:center">
+    <p style="font-size:.88rem;color:var(--muted)">
+      <a href="{{ url_for('webapp.login') }}">Log in</a> or <a href="{{ url_for('webapp.signup') }}">sign up</a> to contribute to this discussion.
+    </p>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+<script>
+document.querySelectorAll('.open-claude-link').forEach(function(link) {
+  link.addEventListener('click', function() {
+    var fb = this.getAttribute('data-fallback');
+    if (fb) setTimeout(function() { window.location = fb; }, 1800);
+  });
+});
+</script>
 {% endblock %}

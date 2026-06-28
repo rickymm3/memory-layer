@@ -174,14 +174,15 @@
   <div class="nav-links">
     {% if current_user.is_authenticated %}
       <a href="{{ url_for('webapp.landing') }}">Home</a>
+      <a href="{{ url_for('webapp.feed') }}">Feed</a>
       <a href="{{ url_for('webapp.explore') }}">Explore</a>
       <a href="{{ url_for('webapp.categories') }}">Categories</a>
-      <a href="{{ url_for('webapp.discussions') }}">Discussions</a>
       <a href="{{ url_for('webapp.search') }}">Search</a>
       <a href="{{ url_for('webapp.notifications') }}">
         Notifications
         {% if unread_count > 0 %}<span class="nav-badge">{{ unread_count }}</span>{% endif %}
       </a>
+      <a href="{{ url_for('webapp.drafts') }}">Drafts</a>
       <a href="{{ url_for('webapp.brain') }}">My Brain</a>
       <a href="{{ url_for('webapp.capture') }}">+ Capture</a>
       {% if current_user.is_admin %}
@@ -223,6 +224,8 @@
 <footer>
   Synapse &mdash; AI beliefs, collectively validated &mdash;
   <a href="https://github.com/rickymm3/memory-layer" target="_blank" rel="noopener">Open source</a>
+  &mdash;
+  <a href="{{ url_for('webapp.privacy') }}">Privacy</a>
 </footer>
 
 </body>

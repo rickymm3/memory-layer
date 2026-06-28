@@ -5,15 +5,13 @@
 <div style="max-width:640px;margin:0 auto">
   <div class="page-header">
     <h1>Notifications</h1>
-    <p>What changed on your conversations.</p>
+    <p>Activity on your posts.</p>
   </div>
 
   {% if items %}
     {% for item in items %}
-    <a href="{{ url_for('webapp.discussion_detail', disc_id=item.disc_id) }}"
-       style="display:block;padding:1rem 1.25rem;background:var(--bg2);border:1px solid {% if not item.read %}var(--accent){% else %}var(--border){% endif %};
-              border-radius:var(--radius);margin-bottom:.65rem;text-decoration:none;
-              transition:border-color .15s">
+    <div style="padding:1rem 1.25rem;background:var(--bg2);border:1px solid {% if not item.read %}var(--accent){% else %}var(--border){% endif %};
+                border-radius:var(--radius);margin-bottom:.65rem;transition:border-color .15s">
       <div style="display:flex;align-items:flex-start;gap:.75rem">
         {% if not item.read %}
         <div style="width:8px;height:8px;border-radius:50%;background:var(--accent);flex-shrink:0;margin-top:.35rem"></div>
@@ -21,35 +19,38 @@
         <div style="width:8px;height:8px;flex-shrink:0"></div>
         {% endif %}
         <div style="flex:1;min-width:0">
-          <div style="font-size:.87rem;color:var(--text);font-weight:500;margin-bottom:.25rem">
+          <div style="font-size:.87rem;color:var(--fg);font-weight:500;margin-bottom:.25rem">
             {{ item.message }}
           </div>
-          <div style="font-size:.8rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-            {{ item.disc_title }}
+          <a href="{{ url_for('webapp.post_detail', post_ref=item.post_slug) }}"
+             style="font-size:.8rem;color:var(--muted);text-decoration:none;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            {{ item.post_title }}
+          </a>
+          <div style="font-size:.75rem;color:var(--muted);margin-top:.35rem;display:flex;align-items:center;gap:.75rem">
+            <span>{{ item.created_at }}</span>
+            <a href="{{ url_for('webapp.open_in_claude', post_id=item.post_id) }}"
+               class="open-claude-link"
+               data-fallback="{{ url_for('webapp.chat') }}?post={{ item.post_id }}"
+               style="color:var(--accent);text-decoration:none;font-weight:500">Open in Claude ↗</a>
           </div>
-          <div style="font-size:.75rem;color:var(--muted);margin-top:.25rem">{{ item.created_at }}</div>
         </div>
-        {% set _status_styles = {
-          'gathering':  'background:#7c3aed;color:#fff',
-          'updated':    'background:#0ea5e9;color:#fff',
-          'answered':   'background:#16a34a;color:#fff',
-          'validated':  'background:#15803d;color:#fff',
-          'reopened':   'background:#d97706;color:#fff',
-          'unresolved': 'background:#6b7280;color:#fff',
-        } %}
-        {% if item.thread_status != 'active' %}
-        <span class="badge" style="{{ _status_styles.get(item.thread_status, '') }};font-size:.68rem;flex-shrink:0">
-          {{ item.thread_status }}
-        </span>
-        {% endif %}
       </div>
-    </a>
+    </div>
     {% endfor %}
+
+<script>
+document.querySelectorAll('.open-claude-link').forEach(function(link) {
+  link.addEventListener('click', function() {
+    var fb = this.getAttribute('data-fallback');
+    if (fb) setTimeout(function() { window.location = fb; }, 1800);
+  });
+});
+</script>
   {% else %}
     <div class="empty">
       <h3>No notifications yet</h3>
       <p style="margin-top:.4rem">
-        When your conversations attract new perspectives, they'll appear here.
+        When your posts attract new perspectives, they'll appear here.
       </p>
     </div>
   {% endif %}

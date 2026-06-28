@@ -27,7 +27,7 @@
     <div class="card" style="padding:1.25rem 1.5rem">
       <div style="display:flex;align-items:flex-start;gap:.75rem">
         <div style="flex:1">
-          <a href="{{ url_for('webapp.post_detail', post_id=post.id) }}"
+          <a href="{{ url_for('webapp.post_detail', post_ref=post.slug or post.id) }}"
              style="font-weight:700;font-size:1rem;text-decoration:none;color:inherit">
             {{ post.title }}
           </a>

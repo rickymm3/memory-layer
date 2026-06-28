@@ -16,21 +16,10 @@
     ],
     "SessionStart": [
       {
-        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
-            "type": "mcp_tool",
-            "server": "memoryLayer",
-            "tool": "memory_task_context",
-            "input": {
-              "project_scope": "project:memory-layer",
-              "model_scope": "model:claude-sonnet-4-6",
-              "task_hint": "session start — auto-loading project context"
-            }
-          },
-          {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/memory-mark-init.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/python3 \"$CLAUDE_PROJECT_DIR\"/scripts/memory_task_context_inject.py --event SessionStart"
           }
         ]
       }
@@ -74,7 +63,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/memory-check.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/python3 \"$CLAUDE_PROJECT_DIR\"/scripts/memory_task_context_inject.py"
           },
           {
             "type": "command",

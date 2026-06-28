@@ -29,11 +29,13 @@ const TOOLS = [
   {
     name: 'memory_health',
     description: 'Check memory-layer health: DB reachability, Ollama reachability, atom count.',
+    annotations: { title: 'Memory Health Check', readOnlyHint: true },
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'memory_search',
     description: 'Search memory atoms by semantic similarity.',
+    annotations: { title: 'Search Memories', readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -49,6 +51,7 @@ const TOOLS = [
   {
     name: 'memory_store_auto',
     description: 'Store a memory atom through the full commit pipeline.',
+    annotations: { title: 'Store Memory', readOnlyHint: false, destructiveHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -59,7 +62,7 @@ const TOOLS = [
         scope:         { type: 'string' },
         confidence:    { type: 'number' },
         importance:    { type: 'number' },
-        visibility:    { type: 'string', description: 'public | private | team. Default public.' },
+        visibility:    { type: 'string', description: 'public | private | team. Default public — only use private for passwords, PII, or sensitive personal details.' },
       },
       required: ['content', 'memory_type', 'relationship'],
     },
@@ -67,6 +70,7 @@ const TOOLS = [
   {
     name: 'memory_get',
     description: 'Fetch a single memory atom by UUID.',
+    annotations: { title: 'Get Memory by ID', readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: { memory_id: { type: 'string', description: 'UUID of the atom.' } },
@@ -76,6 +80,7 @@ const TOOLS = [
   {
     name: 'memory_task_context',
     description: 'Session-start snapshot: project context + model lessons + task history.',
+    annotations: { title: 'Load Session Context', readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -91,6 +96,7 @@ const TOOLS = [
   {
     name: 'memory_audit',
     description: 'Compound corpus health report: stale atoms + near-duplicates + stats.',
+    annotations: { title: 'Audit Memory Corpus', readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -104,6 +110,7 @@ const TOOLS = [
   {
     name: 'memory_link_atoms',
     description: 'Create an explicit directed relation between two atoms.',
+    annotations: { title: 'Link Two Memories', readOnlyHint: false, destructiveHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -118,6 +125,7 @@ const TOOLS = [
   {
     name: 'memory_related',
     description: 'Traverse the atom relations graph from a starting atom.',
+    annotations: { title: 'Find Related Memories', readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -131,6 +139,7 @@ const TOOLS = [
   {
     name: 'memory_push_conversation',
     description: 'Push an entire conversation into memory atoms. Post drafts are generated automatically — check /drafts for suggested posts.',
+    annotations: { title: 'Ingest Conversation', readOnlyHint: false, destructiveHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -141,6 +150,81 @@ const TOOLS = [
     },
   },
 ];
+
+// ── Prompt definitions (handled locally — no server round-trip needed) ───────
+
+const PROMPTS = [
+  {
+    name: 'start_session',
+    description: 'Start a memory-enabled session: consent disclosure + load your Synapse context.',
+    arguments: [],
+  },
+  {
+    name: 'push_to_synapse',
+    description: 'Retroactively push this conversation to Synapse memory. Use when you forgot to start a session.',
+    arguments: [],
+  },
+];
+
+const PROMPT_CONTENT = {
+  start_session: [
+    {
+      role: 'user',
+      content: {
+        type: 'text',
+        text: [
+          '🧠 **Starting a Synapse memory session**',
+          '',
+          'Before we begin — a quick heads-up on what this connection does:',
+          '',
+          '• What you share may be stored as memory atoms (your beliefs, preferences, decisions)',
+          '• High-quality atoms can contribute to public posts on Synapse, visible to other users',
+          '• Passwords, API keys, and private personal details are kept private automatically',
+          '• You can say "keep this private" at any point to exclude something from storage',
+          '',
+          'Selecting this prompt means you\'re good with this for our conversation.',
+          'If you want to push a conversation retroactively instead, use /push_to_synapse.',
+          '',
+          '---',
+          '',
+          'Please call memory_task_context now with:',
+          '  project_scope = "project:memory-layer"',
+          '  model_scope   = "model:claude-sonnet-4-6"',
+          '  task_hint     = "general session — user will direct"',
+          '',
+          'Then confirm you\'re loaded and ready.',
+        ].join('\n'),
+      },
+    },
+  ],
+  push_to_synapse: [
+    {
+      role: 'user',
+      content: {
+        type: 'text',
+        text: [
+          '📤 **Push this conversation to Synapse**',
+          '',
+          'You\'re about to send this conversation retroactively to the Synapse memory layer.',
+          '',
+          'What will happen:',
+          '• The conversation is analyzed for durable memories — beliefs, decisions, preferences',
+          '• Extracted atoms are stored as public by default',
+          '• Passwords and private details are automatically kept private',
+          '• Atoms may contribute to or update public posts on Synapse',
+          '',
+          'By proceeding you\'re consenting to this for the current conversation.',
+          '',
+          '---',
+          '',
+          'Please call memory_push_conversation now.',
+          'Pass the conversation transcript as the "transcript" argument.',
+          'Set is_jsonl_path = false.',
+        ].join('\n'),
+      },
+    },
+  ],
+};
 
 // ── HTTP call to Synapse site ─────────────────────────────────────────────────
 
@@ -198,7 +282,7 @@ async function handle(msg) {
       jsonrpc: '2.0', id,
       result: {
         protocolVersion: '2024-11-05',
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, prompts: {} },
         serverInfo: { name: 'memoryLayer', version: '0.1.0' },
         instructions: [
           'MANDATORY PER-TURN WRITE RULE: After any turn where the user expresses a',
@@ -225,6 +309,29 @@ async function handle(msg) {
 
   if (method === 'tools/list') {
     send({ jsonrpc: '2.0', id, result: { tools: TOOLS } });
+    return;
+  }
+
+  if (method === 'prompts/list') {
+    send({ jsonrpc: '2.0', id, result: { prompts: PROMPTS } });
+    return;
+  }
+
+  if (method === 'prompts/get') {
+    const name = params && params.name;
+    const content = name && PROMPT_CONTENT[name];
+    if (!content) {
+      error(id, -32602, `Unknown prompt: ${name}`);
+      return;
+    }
+    const prompt = PROMPTS.find(p => p.name === name);
+    send({
+      jsonrpc: '2.0', id,
+      result: {
+        description: prompt ? prompt.description : name,
+        messages: content,
+      },
+    });
     return;
   }
 

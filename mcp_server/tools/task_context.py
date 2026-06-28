@@ -97,13 +97,16 @@ def get_task_context(
             "task_run_outcomes": outcome_counts,
         },
         "write_protocol": (
-            "MANDATORY PER-TURN RULE: After any turn where the user expressed a "
-            "preference, correction, decision, or instruction — call memory_store_auto "
-            "before finishing your response. Do not defer to end-of-session. "
+            "MANDATORY PER-TURN RULE: Call memory_store_auto after ANY turn where the "
+            "user shared something worth remembering — facts, opinions, experiences, "
+            "project details, corrections, preferences, decisions. Do NOT skip a turn "
+            "because it felt 'informational' — information is exactly what gets stored. "
+            "Only skip pure pleasantries ('ok', 'thanks', 'got it'). "
             "Scope: project facts → scope='project:memory-layer', "
             "model behavior observations → scope='model:claude-sonnet-4-6', "
             "user preferences → scope='user'. "
-            "Report both memory_atom_id and memory_signal_id for every write. "
-            "This rule applies in Claude Desktop, Claude CLI, and all other clients."
+            "Preserve entity-level facts verbatim — never compress names, numbers, "
+            "mechanics, or rules into abstract summaries. "
+            "Report both memory_atom_id and memory_signal_id for every write."
         ),
     }

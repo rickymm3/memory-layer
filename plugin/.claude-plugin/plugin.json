@@ -1,0 +1,9 @@
+{
+  "name": "synapse",
+  "description": "Persistent memory for Claude — stores preferences, decisions, and context across all your conversations and surfaces them when relevant.",
+  "version": "0.1.0",
+  "author": { "name": "rickymm3" },
+  "homepage": "https://github.com/rickymm3/memory-layer",
+  "license": "MIT",
+  "keywords": ["memory", "persistence", "context", "synapse", "mcp"]
+}

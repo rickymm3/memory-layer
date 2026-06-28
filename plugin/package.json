@@ -1,0 +1,16 @@
+{
+  "name": "synapse-plugin",
+  "version": "0.1.0",
+  "description": "Claude Code plugin for the Synapse memory layer",
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "bin": { "synapse-plugin": "./setup.js" },
+  "files": [
+    ".claude-plugin/",
+    ".mcp.json",
+    "hooks/",
+    "skills/",
+    "setup.js",
+    "README.md"
+  ]
+}
