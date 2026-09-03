@@ -52,18 +52,22 @@ Each chat turn:
 
 ### MCP server (`mcp_server/server.py`)
 
-8 tools exposed via stdio and SSE/HTTP:
+12 tools exposed via stdio and SSE/HTTP:
 
 | Tool | Purpose |
 |---|---|
 | `memory_health` | DB + Ollama reachability, atom count |
 | `memory_search` | Semantic similarity search with scope/type filters |
+| `memory_search_approved` | Strict project-scoped search of human-approved, active atoms for public consumers |
 | `memory_store_auto` | Full commit pipeline write |
+| `memory_propose_signal` | Queue untrusted evidence for human review without creating an atom |
+| `memory_store_approved` | Commit a reviewed proposal using a short-lived approval token |
 | `memory_get` | Fetch single atom by UUID |
 | `memory_task_context` | Session-start snapshot: project + model lessons + task history |
 | `memory_audit` | Compound health + stale + duplicate report |
 | `memory_link_atoms` | Create explicit relation between atoms |
 | `memory_related` | Traverse atom relations graph (1–3 hops) |
+| `memory_push_conversation` | Extract and store durable atoms from a consented transcript |
 
 Transport: `stdio` (default, for Claude Desktop / Claude Code) or `SSE/HTTP` (`MCP_TRANSPORT=sse`, port 8765, Bearer token auth).
 
@@ -210,6 +214,9 @@ Target: Voyage AI `voyage-3` (1024-dim, HNSW-compatible) — enables proper inde
 - Signals are immutable. Atoms are revised, never deleted.
 - All writes are dual: one `memory_atom` + one `memory_signal` per transaction.
 - No silent writes. Every storage event is reported with both IDs.
+- Confidence and authority are separate. Public knowledge consumers use
+  `memory_search_approved`; automatic writes remain `unreviewed` until a human
+  approval path promotes them.
 - Parameterized SQL only. No f-string interpolation of user input.
 - No direct HNSW index on `vector(4096)`. Exact cosine search only (until migration).
 - `FLASK_SECRET_KEY` must be set. App raises `RuntimeError` if not.

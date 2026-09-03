@@ -50,8 +50,14 @@ CREATE TABLE IF NOT EXISTS memory_atoms (
     last_accessed_at TEXT,
     access_count INTEGER NOT NULL DEFAULT 0,
     visibility TEXT NOT NULL DEFAULT 'private',
-    unique_source_count INTEGER NOT NULL DEFAULT 0
+    unique_source_count INTEGER NOT NULL DEFAULT 0,
+    authority_status TEXT NOT NULL DEFAULT 'unreviewed',
+    authority_reviewed_at TEXT,
+    authority_reviewer TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_memory_atoms_authority_scope
+    ON memory_atoms(scope, authority_status, lifecycle_status);
 
 CREATE TABLE IF NOT EXISTS memory_signals (
     id TEXT PRIMARY KEY,
@@ -90,6 +96,8 @@ CREATE TABLE IF NOT EXISTS memory_proposals (
     relationship TEXT,
     reconciliation_reason TEXT,
     matched_memory_ids TEXT,
+    visibility TEXT NOT NULL DEFAULT 'private',
+    source_user_id TEXT,
     status TEXT NOT NULL DEFAULT 'pending_review',
     approval_token TEXT,
     token_expires_at TEXT,
@@ -297,7 +305,7 @@ def _mmr_select(
 
 
 def _sl_atom_row_to_dict(row: sqlite3.Row | tuple, similarity: float | None = None) -> dict[str, Any]:
-    """Convert a 21-column SELECT * from memory_atoms row to a dict."""
+    """Convert a SELECT * from memory_atoms row to a dict."""
     ds = float(row[12]) if row[12] is not None else 0.0
     d: dict[str, Any] = {
         "id": row[0],
@@ -319,6 +327,15 @@ def _sl_atom_row_to_dict(row: sqlite3.Row | tuple, similarity: float | None = No
         "retrieval_priority": float(row[17]) if row[17] is not None else 1.0,
         "lifecycle_updated_at": row[18],
     }
+    if len(row) > 29:
+        d.update({
+            "source_type": row[21],
+            "source_url": row[22],
+            "visibility": row[25],
+            "authority_status": row[27] or "unreviewed",
+            "authority_reviewed_at": row[28],
+            "authority_reviewer": row[29],
+        })
     if similarity is not None:
         d["similarity"] = similarity
     return d
@@ -340,6 +357,33 @@ class SQLiteStore:
     def init_db(self) -> None:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            # CREATE TABLE IF NOT EXISTS does not add columns to an existing
+            # SQLite database, so apply the authority extension additively.
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(memory_atoms);").fetchall()
+            }
+            additions = {
+                "authority_status": "TEXT NOT NULL DEFAULT 'unreviewed'",
+                "authority_reviewed_at": "TEXT",
+                "authority_reviewer": "TEXT",
+            }
+            for name, definition in additions.items():
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE memory_atoms ADD COLUMN {name} {definition};")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memory_atoms_authority_scope "
+                "ON memory_atoms(scope, authority_status, lifecycle_status);"
+            )
+            proposal_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(memory_proposals);").fetchall()
+            }
+            proposal_additions = {
+                "visibility": "TEXT NOT NULL DEFAULT 'private'",
+                "source_user_id": "TEXT",
+            }
+            for name, definition in proposal_additions.items():
+                if name not in proposal_columns:
+                    conn.execute(f"ALTER TABLE memory_proposals ADD COLUMN {name} {definition};")
 
     # ── Core write path ───────────────────────────────────────────────────────
 
@@ -391,13 +435,21 @@ class SQLiteStore:
         source_url: str | None = None,
         atom_source_type: str | None = None,
         source_user_id: str | None = None,
-        visibility: str | None = None,  # accepted but ignored — SQLite has no visibility column
+        visibility: str = "private",
+        authority_status: str = "unreviewed",
+        authority_reviewer: str | None = None,
     ) -> tuple[str, str]:
         summary = (context_summary or "").strip() or content
         embedding = self.ollama.embed_text(content)
         metadata_json = json.dumps(signal_metadata) if signal_metadata else None
         _atom_source_type = atom_source_type or source_type
         _relationship = relationship or "new"
+        _visibility = visibility if visibility in ("private", "team", "public") else "private"
+        _authority_status = (
+            authority_status
+            if authority_status in ("unreviewed", "approved", "rejected")
+            else "unreviewed"
+        )
         now = _now()
         atom_id = _uid()
         signal_id = _uid()
@@ -408,12 +460,16 @@ class SQLiteStore:
                 INSERT INTO memory_atoms
                     (id, content, context_summary, memory_type, scope,
                      confidence, importance, embedding_model, embedding,
-                     source_type, source_url, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     source_type, source_url, visibility,
+                     authority_status, authority_reviewed_at, authority_reviewer,
+                     created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (atom_id, content, summary, memory_type, scope,
                  confidence, importance, self.config.embedding_model,
-                 json.dumps(embedding), _atom_source_type, source_url, now),
+                 json.dumps(embedding), _atom_source_type, source_url, _visibility,
+                 _authority_status, now if _authority_status == "approved" else None,
+                 authority_reviewer, now),
             )
             conn.execute(
                 """
@@ -762,9 +818,12 @@ class SQLiteStore:
         confidence: float = 0.8, importance: float = 0.5,
         reconciliation_reason: str | None = None,
         matched_memory_ids: list[str] | None = None,
+        visibility: str = "private",
+        source_user_id: str | None = None,
     ) -> str:
         summary = (context_summary or "").strip() or content
         matched_json = json.dumps(matched_memory_ids) if matched_memory_ids else None
+        effective_visibility = visibility if visibility in ("private", "team", "public") else "private"
         proposal_id = _uid()
         with self._connect() as conn:
             conn.execute(
@@ -772,13 +831,14 @@ class SQLiteStore:
                 INSERT INTO memory_proposals
                     (id, content, context_summary, memory_type, scope,
                      confidence, importance, relationship, reconciliation_reason,
-                     matched_memory_ids, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     matched_memory_ids, visibility, source_user_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (proposal_id, content.strip(), summary, memory_type.strip(), scope,
                  max(0.0, min(1.0, float(confidence))),
                  max(0.0, min(1.0, float(importance))),
-                 relationship, reconciliation_reason, matched_json, _now()),
+                 relationship, reconciliation_reason, matched_json,
+                 effective_visibility, source_user_id, _now()),
             )
         return proposal_id
 
@@ -1512,7 +1572,7 @@ class SQLiteStore:
         min_similarity: float | None = None,
     ) -> dict[str, Any]:
         """Retrieve current atoms plus semantically relevant historical atoms."""
-        embedding = get_embedding_client().embed_text(query)
+        embedding = self.ollama.embed_text(query)
         threshold = min_similarity if min_similarity is not None else 0.3
 
         with self._connect() as conn:
@@ -1597,7 +1657,9 @@ class SQLiteStore:
                        confidence, importance, support_weight, opposition_weight,
                        disagreement_score, last_recomputed_at, created_at,
                        lifecycle_status, superseded_by_atom_id, lifecycle_reason,
-                       retrieval_priority, lifecycle_updated_at, unique_source_count
+                       retrieval_priority, lifecycle_updated_at, unique_source_count,
+                       source_type, source_url, visibility, authority_status,
+                       authority_reviewed_at, authority_reviewer
                 FROM memory_atoms WHERE id=?;
                 """,
                 (memory_id,),
@@ -1637,6 +1699,12 @@ class SQLiteStore:
             "retrieval_priority": float(row[15]) if row[15] is not None else 1.0,
             "lifecycle_updated_at": row[16],
             "unique_source_count": int(row[17]) if row[17] is not None else 0,
+            "source_type": row[18],
+            "source_url": row[19],
+            "visibility": row[20],
+            "authority_status": row[21] or "unreviewed",
+            "authority_reviewed_at": row[22],
+            "authority_reviewer": row[23],
             "signals_summary": {"count": sig_count, "top_sources": top_sources,
                                 "most_recent_signal_at": sig_recent},
         }
@@ -1675,20 +1743,50 @@ class SQLiteStore:
         scope: str | None = None,
         memory_type: str | None = None,
         min_similarity: float = 0.0,
+        requesting_user: str | None = None,
+        lifecycle_status: str | None = None,
+        authority_status: str | None = None,
+        min_confidence: float | None = None,
+        max_disagreement: float | None = None,
+        visibility: str | None = None,
     ) -> list[dict[str, Any]]:
         """Semantic search with signals summary."""
         embedding = self.ollama.embed_text(query)
         clamped = max(0.0, min(float(min_similarity), 1.0))
 
         with self._connect() as conn:
-            conditions = ["lifecycle_status != 'archived'"]
+            conditions: list[str] = []
             params: list[Any] = []
+            if lifecycle_status:
+                conditions.append("lifecycle_status=?")
+                params.append(lifecycle_status)
+            else:
+                conditions.append("lifecycle_status != 'archived'")
+            if authority_status:
+                conditions.append("authority_status=?")
+                params.append(authority_status)
+            if min_confidence is not None:
+                conditions.append("confidence>=?")
+                params.append(max(0.0, min(float(min_confidence), 1.0)))
+            if max_disagreement is not None:
+                conditions.append("disagreement_score<=?")
+                params.append(max(0.0, min(float(max_disagreement), 1.0)))
+            if visibility:
+                conditions.append("visibility=?")
+                params.append(visibility)
             if scope:
                 conditions.append("scope=?")
                 params.append(scope)
             if memory_type:
                 conditions.append("memory_type=?")
                 params.append(memory_type)
+            if requesting_user:
+                conditions.append(
+                    "(visibility='public' OR EXISTS ("
+                    "SELECT 1 FROM memory_signals ms "
+                    "WHERE ms.memory_atom_id=memory_atoms.id AND ms.source_user_id=?))"
+                )
+                params.append(requesting_user)
             where = "WHERE " + " AND ".join(conditions)
             rows = conn.execute(
                 f"""
@@ -1696,7 +1794,9 @@ class SQLiteStore:
                        confidence, importance, embedding, created_at, support_weight,
                        opposition_weight, disagreement_score, last_recomputed_at,
                        lifecycle_status, superseded_by_atom_id, lifecycle_reason,
-                       retrieval_priority, lifecycle_updated_at
+                       retrieval_priority, lifecycle_updated_at,
+                       source_type, source_url, visibility, authority_status,
+                       authority_reviewed_at, authority_reviewer
                 FROM memory_atoms {where};
                 """,
                 tuple(params),
@@ -1759,9 +1859,35 @@ class SQLiteStore:
                 "lifecycle_reason": row[15],
                 "retrieval_priority": float(row[16]) if row[16] is not None else 1.0,
                 "lifecycle_updated_at": row[17],
+                "source_type": row[18],
+                "source_url": row[19],
+                "visibility": row[20],
+                "authority_status": row[21] or "unreviewed",
+                "authority_reviewed_at": row[22],
+                "authority_reviewer": row[23],
                 "signals_summary": sigs.get(row[0], _empty),
             })
         return results
+
+    def get_approved_memory_revision(self, scope: str) -> str | None:
+        """Return a stable scope revision for approved-render cache keys."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT MAX(CASE
+                    WHEN COALESCE(lifecycle_updated_at, created_at)
+                         > COALESCE(authority_reviewed_at, created_at)
+                    THEN COALESCE(lifecycle_updated_at, created_at)
+                    ELSE COALESCE(authority_reviewed_at, created_at)
+                END)
+                FROM memory_atoms
+                WHERE scope=?
+                  AND visibility='public'
+                  AND authority_reviewed_at IS NOT NULL;
+                """,
+                (scope,),
+            ).fetchone()
+        return row[0] if row and row[0] else None
 
     def log_conversation_turn(
         self,
@@ -1929,7 +2055,8 @@ class SQLiteStore:
             row = conn.execute(
                 "SELECT id, status, content, context_summary, memory_type, scope, "
                 "confidence, importance, relationship, reconciliation_reason, "
-                "matched_memory_ids, approval_token, token_expires_at FROM memory_proposals WHERE id=?;",
+                "matched_memory_ids, visibility, source_user_id, approval_token, token_expires_at "
+                "FROM memory_proposals WHERE id=?;",
                 (proposal_id.strip(),),
             ).fetchone()
 
@@ -1938,7 +2065,8 @@ class SQLiteStore:
 
             p_id, p_status, p_content, p_context_summary, p_memory_type, p_scope, \
                 p_confidence, p_importance, p_relationship, p_reconciliation_reason, \
-                p_matched_ids_json, p_token, p_token_expires_at = row
+                p_matched_ids_json, p_visibility, p_source_user_id, \
+                p_token, p_token_expires_at = row
 
             if p_status == "used":
                 return {"error": "proposal already used"}
@@ -1965,6 +2093,8 @@ class SQLiteStore:
             "confidence": float(p_confidence), "importance": float(p_importance),
             "relationship": p_relationship, "reconciliation_reason": p_reconciliation_reason,
             "matched_memory_ids": p_matched_ids_json,
+            "visibility": p_visibility,
+            "source_user_id": p_source_user_id,
         }
 
     # ── store_context_trace / store_response_trace (used by commit_pipeline) ──

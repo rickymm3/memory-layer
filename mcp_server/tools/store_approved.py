@@ -9,6 +9,7 @@ from app.db import get_store
 def store_memory_approved(
     proposal_id: str,
     approval_token: str,
+    authority_reviewer: str = "human_review",
 ) -> dict[str, Any]:
     """Store a confirmation-path candidate after CLI review and approval.
 
@@ -40,7 +41,9 @@ def store_memory_approved(
             except (ValueError, TypeError):
                 matched_ids = None
 
-        signal_metadata: dict | None = {"matched_memory_ids": matched_ids} if matched_ids else None
+        signal_metadata: dict = {"proposal_id": proposal_id}
+        if matched_ids:
+            signal_metadata["matched_memory_ids"] = matched_ids
 
         atom_id, signal_id = store.store_memory_with_signal(
             content=proposal["content"],
@@ -52,6 +55,13 @@ def store_memory_approved(
             relationship=proposal.get("relationship"),
             reconciliation_reason=proposal.get("reconciliation_reason"),
             signal_metadata=signal_metadata,
+            source_key="human_review",
+            source_type="human_review",
+            atom_source_type="reviewed_proposal",
+            authority_status="approved",
+            authority_reviewer=authority_reviewer,
+            visibility=proposal.get("visibility") or "private",
+            source_user_id=proposal.get("source_user_id"),
         )
 
         return {
@@ -64,6 +74,7 @@ def store_memory_approved(
             "relationship": proposal.get("relationship"),
             "signal_created": True,
             "auto_stored": False,
+            "authority_status": "approved",
         }
 
     except Exception as exc:

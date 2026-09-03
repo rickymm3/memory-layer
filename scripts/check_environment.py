@@ -50,6 +50,12 @@ EXPECTED_ATOM_AGG_COLUMNS = [
     "last_recomputed_at",
 ]
 
+EXPECTED_AUTHORITY_COLUMNS = [
+    "authority_status",
+    "authority_reviewed_at",
+    "authority_reviewer",
+]
+
 
 @dataclass
 class CheckResult:
@@ -251,7 +257,7 @@ def main() -> int:
     db_ok = False
     db_conn: psycopg.Connection | None = None
     try:
-        db_conn = psycopg.connect(database_url)
+        db_conn = psycopg.connect(database_url, connect_timeout=5)
         db_ok = True
         with db_conn.cursor() as cur:
             cur.execute("SELECT 1;")
@@ -471,6 +477,39 @@ def main() -> int:
                 )
             )
 
+            missing_authority_cols = [
+                col
+                for col in EXPECTED_AUTHORITY_COLUMNS
+                if not bool(
+                    run_scalar(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM pg_attribute a
+                            JOIN pg_class c ON c.oid = a.attrelid
+                            JOIN pg_namespace n ON n.oid = c.relnamespace
+                            WHERE n.nspname = 'public'
+                              AND c.relname = 'memory_atoms'
+                              AND a.attname = %s
+                              AND a.attnum > 0
+                              AND NOT a.attisdropped
+                        );
+                        """,
+                        (col,),
+                    )
+                )
+            ]
+            results.append(
+                CheckResult(
+                    "memory_atoms authority columns",
+                    "PASS" if not missing_authority_cols else "FAIL",
+                    "all present" if not missing_authority_cols else (
+                        f"missing: {', '.join(missing_authority_cols)} — "
+                        "run db/migrations/046_add_authority_status.sql"
+                    ),
+                )
+            )
+
             # --- Phase 7: task_runs table ---
             task_runs_exists = bool(
                 run_scalar("SELECT to_regclass('public.task_runs') IS NOT NULL;")
@@ -517,6 +556,7 @@ def main() -> int:
             results.append(CheckResult("memory_signals columns", "FAIL", str(exc)))
             results.append(CheckResult("memory_signals indexes", "FAIL", str(exc)))
             results.append(CheckResult("memory_atoms aggregation columns", "FAIL", str(exc)))
+            results.append(CheckResult("memory_atoms authority columns", "FAIL", str(exc)))
             results.append(CheckResult("task_runs exists", "FAIL", str(exc)))
     else:
         results.append(
@@ -552,6 +592,11 @@ def main() -> int:
         results.append(
             CheckResult(
                 "memory_atoms aggregation columns", "FAIL", "skipped: Postgres unreachable"
+            )
+        )
+        results.append(
+            CheckResult(
+                "memory_atoms authority columns", "FAIL", "skipped: Postgres unreachable"
             )
         )
         results.append(

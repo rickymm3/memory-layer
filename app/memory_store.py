@@ -112,6 +112,8 @@ class MemoryStore:
         atom_source_type: str | None = None,
         source_user_id: str | None = None,
         visibility: str = "private",
+        authority_status: str = "unreviewed",
+        authority_reviewer: str | None = None,
     ) -> tuple[str, str]:
         """Store a memory_atom and a linked memory_signal in a single transaction.
 
@@ -119,8 +121,9 @@ class MemoryStore:
         so no post-creation mutation is needed.
 
         ``atom_source_type`` and ``source_url`` are written to the atom's provenance
-        columns (migration 013).  When omitted, ``atom_source_type`` falls back to
-        ``source_type`` so existing callers are unaffected.
+        columns (migration 013).  ``authority_status`` is a separate editorial
+        boundary: ordinary writes remain unreviewed, while the human approval path
+        may explicitly mark an atom approved.
         """
         summary_to_store = (
             context_summary.strip()
@@ -137,14 +140,23 @@ class MemoryStore:
                 # Insert memory_atom first
                 _atom_source_type = atom_source_type or source_type
                 _visibility = visibility if visibility in ("private", "team", "public") else "private"
+                _authority_status = (
+                    authority_status
+                    if authority_status in ("unreviewed", "approved", "rejected")
+                    else "unreviewed"
+                )
                 cur.execute(
                     """
                     INSERT INTO memory_atoms (
                         content, context_summary, memory_type, scope,
                         confidence, importance, embedding_model, embedding,
-                        source_type, source_url, visibility
+                        source_type, source_url, visibility,
+                        authority_status, authority_reviewed_at, authority_reviewer
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector, %s, %s, %s)
+                    VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s::vector, %s, %s, %s,
+                        %s, CASE WHEN %s = 'approved' THEN now() ELSE NULL END, %s
+                    )
                     RETURNING id;
                     """,
                     (
@@ -159,6 +171,9 @@ class MemoryStore:
                         _atom_source_type,
                         source_url,
                         _visibility,
+                        _authority_status,
+                        _authority_status,
+                        authority_reviewer,
                     ),
                 )
                 memory_id = cur.fetchone()[0]
@@ -729,6 +744,8 @@ class MemoryStore:
         importance: float = 0.5,
         reconciliation_reason: str | None = None,
         matched_memory_ids: list[str] | None = None,
+        visibility: str = "private",
+        source_user_id: str | None = None,
     ) -> str:
         """Queue a candidate as a pending proposal for human review.
 
@@ -738,6 +755,7 @@ class MemoryStore:
         """
         summary = (context_summary or "").strip() or content
         matched_ids_json = json.dumps(matched_memory_ids) if matched_memory_ids else None
+        effective_visibility = visibility if visibility in ("private", "team", "public") else "private"
 
         with psycopg.connect(self.config.database_url) as conn:
             with conn.cursor() as cur:
@@ -746,9 +764,10 @@ class MemoryStore:
                     INSERT INTO memory_proposals (
                         content, context_summary, memory_type, scope,
                         confidence, importance,
-                        relationship, reconciliation_reason, matched_memory_ids
+                        relationship, reconciliation_reason, matched_memory_ids,
+                        visibility, source_user_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id;
                     """,
                     (
@@ -761,6 +780,8 @@ class MemoryStore:
                         relationship,
                         reconciliation_reason,
                         matched_ids_json,
+                        effective_visibility,
+                        source_user_id,
                     ),
                 )
                 row = cur.fetchone()
@@ -2190,7 +2211,9 @@ class MemoryStore:
                            confidence, importance, support_weight, opposition_weight,
                            disagreement_score, last_recomputed_at, created_at,
                            lifecycle_status, superseded_by_atom_id, lifecycle_reason,
-                           retrieval_priority, lifecycle_updated_at, unique_source_count
+                           retrieval_priority, lifecycle_updated_at, unique_source_count,
+                           source_type, source_url, visibility, authority_status,
+                           authority_reviewed_at, authority_reviewer
                     FROM memory_atoms WHERE id = %s;
                     """,
                     (memory_id,),
@@ -2244,6 +2267,12 @@ class MemoryStore:
             "retrieval_priority": float(row[15]),
             "lifecycle_updated_at": row[16].isoformat() if row[16] else None,
             "unique_source_count": int(row[17]) if row[17] is not None else 0,
+            "source_type": row[18],
+            "source_url": row[19],
+            "visibility": row[20],
+            "authority_status": row[21] or "unreviewed",
+            "authority_reviewed_at": row[22].isoformat() if row[22] else None,
+            "authority_reviewer": row[23],
             "signals_summary": sig_summary,
         }
 
@@ -2294,6 +2323,11 @@ class MemoryStore:
         memory_type: str | None = None,
         min_similarity: float = 0.0,
         requesting_user: str | None = None,
+        lifecycle_status: str | None = None,
+        authority_status: str | None = None,
+        min_confidence: float | None = None,
+        max_disagreement: float | None = None,
+        visibility: str | None = None,
     ) -> list[dict[str, Any]]:
         """Semantic search with signals summary included.
 
@@ -2306,8 +2340,25 @@ class MemoryStore:
         embedding_literal = self._vector_literal(embedding)
         clamped_min_similarity = max(0.0, min(float(min_similarity), 1.0))
 
-        where_clauses: list[str] = ["lifecycle_status != 'archived'"]
+        where_clauses: list[str] = []
         filter_params: list[Any] = []
+        if lifecycle_status:
+            where_clauses.append("lifecycle_status = %s")
+            filter_params.append(lifecycle_status)
+        else:
+            where_clauses.append("lifecycle_status != 'archived'")
+        if authority_status:
+            where_clauses.append("authority_status = %s")
+            filter_params.append(authority_status)
+        if min_confidence is not None:
+            where_clauses.append("confidence >= %s")
+            filter_params.append(max(0.0, min(float(min_confidence), 1.0)))
+        if max_disagreement is not None:
+            where_clauses.append("disagreement_score <= %s")
+            filter_params.append(max(0.0, min(float(max_disagreement), 1.0)))
+        if visibility:
+            where_clauses.append("visibility = %s")
+            filter_params.append(visibility)
         if scope:
             where_clauses.append("scope = %s")
             filter_params.append(scope)
@@ -2330,7 +2381,9 @@ class MemoryStore:
                            created_at, support_weight, opposition_weight,
                            disagreement_score, last_recomputed_at,
                            lifecycle_status, superseded_by_atom_id, lifecycle_reason,
-                           retrieval_priority, lifecycle_updated_at
+                           retrieval_priority, lifecycle_updated_at,
+                           source_type, source_url, visibility, authority_status,
+                           authority_reviewed_at, authority_reviewer
                     FROM memory_atoms {where_sql}
                     ORDER BY embedding <=> %s::vector LIMIT %s;
                     """,
@@ -2399,9 +2452,35 @@ class MemoryStore:
                 "lifecycle_reason": row[15],
                 "retrieval_priority": float(row[16]),
                 "lifecycle_updated_at": row[17].isoformat() if row[17] else None,
+                "source_type": row[18],
+                "source_url": row[19],
+                "visibility": row[20],
+                "authority_status": row[21] or "unreviewed",
+                "authority_reviewed_at": row[22].isoformat() if row[22] else None,
+                "authority_reviewer": row[23],
                 "signals_summary": sigs.get(str(row[0]), _empty),
             })
         return results
+
+    def get_approved_memory_revision(self, scope: str) -> str | None:
+        """Return a stable scope revision for approved-render cache keys."""
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT MAX(GREATEST(
+                        COALESCE(authority_reviewed_at, created_at),
+                        COALESCE(lifecycle_updated_at, created_at)
+                    ))
+                    FROM memory_atoms
+                    WHERE scope = %s
+                      AND visibility = 'public'
+                      AND authority_reviewed_at IS NOT NULL;
+                    """,
+                    (scope,),
+                )
+                row = cur.fetchone()
+        return row[0].isoformat() if row and row[0] else None
 
     def log_conversation_turn(
         self,
@@ -2614,7 +2693,8 @@ class MemoryStore:
                     """
                     SELECT id, status, content, context_summary, memory_type, scope,
                            confidence, importance, relationship, reconciliation_reason,
-                           matched_memory_ids, approval_token, token_expires_at
+                           matched_memory_ids, visibility, source_user_id,
+                           approval_token, token_expires_at
                     FROM memory_proposals WHERE id = %s;
                     """,
                     (proposal_id.strip(),),
@@ -2626,7 +2706,8 @@ class MemoryStore:
 
             p_id, p_status, p_content, p_context_summary, p_memory_type, p_scope, \
                 p_confidence, p_importance, p_relationship, p_reconciliation_reason, \
-                p_matched_ids_json, p_token, p_token_expires_at = row
+                p_matched_ids_json, p_visibility, p_source_user_id, \
+                p_token, p_token_expires_at = row
 
             if p_status == "used":
                 return {"error": "proposal already used"}
@@ -2661,6 +2742,8 @@ class MemoryStore:
             "relationship": p_relationship,
             "reconciliation_reason": p_reconciliation_reason,
             "matched_memory_ids": p_matched_ids_json,
+            "visibility": p_visibility,
+            "source_user_id": p_source_user_id,
         }
 
 
