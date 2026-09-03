@@ -1,9 +1,12 @@
 """MCP server for memory-layer — stdio and SSE/HTTP modes.
 
-Eight tools — the full working surface:
+Twelve tools — the full working surface:
   memory_health       : check DB + Ollama reachability
   memory_search       : semantic similarity search
+  memory_search_approved: approved-only project search for public consumers
   memory_store_auto   : write a memory atom through the full commit pipeline
+  memory_propose_signal: queue a candidate without writing authoritative memory
+  memory_store_approved: commit a human-approved proposal with an approval token
   memory_get          : fetch a single atom by UUID (includes signals summary)
   memory_task_context : session-start compound snapshot
   memory_audit        : compound health + stale + duplicate report
@@ -31,8 +34,10 @@ from mcp.types import ToolAnnotations, PromptMessage, TextContent
 from mcp_server.tools.get import get_memory_by_id
 from mcp_server.tools.health import get_memory_health
 from mcp_server.tools.task_context import get_task_context
-from mcp_server.tools.search import search_memories
-from mcp_server.tools.store_auto import store_memory_auto
+from mcp_server.tools.search import search_memories, search_approved_memories
+from mcp_server.tools.store_auto import store_memory_auto as _store_memory_auto
+from mcp_server.tools.propose_signal import propose_memory_signal
+from mcp_server.tools.store_approved import store_memory_approved as _store_memory_approved
 from mcp_server.tools.stale_atoms import get_stale_atoms
 from mcp_server.tools.find_duplicates import find_duplicate_atoms
 from mcp_server.tools.link_atoms import link_atoms
@@ -89,6 +94,33 @@ def memory_search(
     )
 
 
+@mcp.tool(annotations=ToolAnnotations(title="Search Approved Memories", readOnlyHint=True))
+def memory_search_approved(
+    query: str,
+    scope: str,
+    limit: int = 8,
+    memory_type: str | None = None,
+    min_similarity: float = 0.45,
+    min_confidence: float = 0.70,
+    max_disagreement: float = 0.35,
+) -> dict[str, Any]:
+    """Search only human-approved, active, public memory in one project scope.
+
+    This is the safe read contract for public websites and other constrained
+    consumers. Results exclude unreviewed, rejected, contested, superseded,
+    deprecated, archived, low-confidence, and highly disputed atoms.
+    """
+    return search_approved_memories(
+        query=query,
+        scope=scope,
+        limit=limit,
+        memory_type=memory_type,
+        min_similarity=min_similarity,
+        min_confidence=min_confidence,
+        max_disagreement=max_disagreement,
+    )
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Store Memory", readOnlyHint=False, destructiveHint=True))
 def memory_store_auto(
     content: str,
@@ -132,7 +164,7 @@ def memory_store_auto(
     from mcp_server.auth_context import current_user_id as _uid_ctx  # noqa: PLC0415
     effective_user = source_user_id or _uid_ctx.get() or os.environ.get("MEMORY_USER_ID")
 
-    return store_memory_auto(
+    return _store_memory_auto(
         content=content,
         memory_type=memory_type,
         relationship=relationship,
@@ -144,6 +176,54 @@ def memory_store_auto(
         matched_memory_ids=matched_memory_ids,
         source_user_id=effective_user,
         visibility=visibility,
+    )
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Propose Memory Evidence", readOnlyHint=False))
+def memory_propose_signal(
+    content: str,
+    memory_type: str,
+    relationship: str,
+    context_summary: str | None = None,
+    scope: str | None = None,
+    confidence: float = 0.8,
+    importance: float = 0.5,
+    reconciliation_reason: str | None = None,
+    matched_memory_ids: list[str] | None = None,
+    visibility: str = "private",
+) -> dict[str, Any]:
+    """Queue untrusted evidence for review without creating a memory atom."""
+    from mcp_server.auth_context import current_user_id as _uid_ctx  # noqa: PLC0415
+    return propose_memory_signal(
+        content=content,
+        memory_type=memory_type,
+        relationship=relationship,
+        context_summary=context_summary,
+        scope=scope,
+        confidence=confidence,
+        importance=importance,
+        reconciliation_reason=reconciliation_reason,
+        matched_memory_ids=matched_memory_ids,
+        visibility=visibility,
+        source_user_id=_uid_ctx.get() or os.environ.get("MEMORY_USER_ID"),
+    )
+
+
+@mcp.tool(annotations=ToolAnnotations(
+    title="Store Approved Memory",
+    readOnlyHint=False,
+    destructiveHint=True,
+))
+def memory_store_approved(
+    proposal_id: str,
+    approval_token: str,
+) -> dict[str, Any]:
+    """Commit a proposal after the human review CLI issues a short-lived token."""
+    from mcp_server.auth_context import current_user_id as _uid_ctx  # noqa: PLC0415
+    return _store_memory_approved(
+        proposal_id=proposal_id,
+        approval_token=approval_token,
+        authority_reviewer=_uid_ctx.get() or os.environ.get("MEMORY_USER_ID") or "human_review",
     )
 
 
@@ -409,7 +489,8 @@ def push_to_synapse() -> list[PromptMessage]:
     return [PromptMessage(role="user", content=TextContent(type="text", text=_PUSH_TEXT))]
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Run the MCP server using the configured transport."""
     transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
 
     if transport == "sse":
@@ -424,3 +505,7 @@ if __name__ == "__main__":
         uvicorn.run(asgi_app, host="0.0.0.0", port=port, log_level="warning")
     else:
         mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()

@@ -17,6 +17,14 @@ CREATE TABLE IF NOT EXISTS memory_atoms (
 ALTER TABLE memory_atoms
 ADD COLUMN IF NOT EXISTS context_summary text;
 
+-- Authority is deliberately separate from confidence and lifecycle. A record can
+-- be active and high-confidence without having passed human/editorial review.
+ALTER TABLE memory_atoms
+    ADD COLUMN IF NOT EXISTS authority_status TEXT NOT NULL DEFAULT 'unreviewed'
+        CHECK (authority_status IN ('unreviewed', 'approved', 'rejected')),
+    ADD COLUMN IF NOT EXISTS authority_reviewed_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS authority_reviewer TEXT;
+
 ALTER TABLE memory_atoms
 ADD COLUMN IF NOT EXISTS topic_tags TEXT[] NOT NULL DEFAULT '{}';
 
@@ -98,6 +106,9 @@ CREATE TABLE IF NOT EXISTS memory_proposals (
     relationship          TEXT NOT NULL,
     reconciliation_reason TEXT,
     matched_memory_ids    JSONB,
+    visibility            TEXT NOT NULL DEFAULT 'private'
+        CHECK (visibility IN ('private', 'team', 'public')),
+    source_user_id        TEXT,
 
     -- CLI-issued approval token (single-use, time-limited)
     approval_token        TEXT,
@@ -122,6 +133,8 @@ ALTER TABLE memory_atoms
     ADD COLUMN IF NOT EXISTS lifecycle_updated_at   TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_memory_atoms_lifecycle_status ON memory_atoms(lifecycle_status);
+CREATE INDEX IF NOT EXISTS idx_memory_atoms_authority_scope
+    ON memory_atoms (scope, authority_status, lifecycle_status);
 
 -- Access tracking: lazy decay computes effective confidence at read time from these fields.
 -- last_accessed_at + access_count enable: decay formula at retrieval, annual purge of dead atoms.

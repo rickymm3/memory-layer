@@ -17,6 +17,14 @@ CREATE TABLE IF NOT EXISTS memory_atoms (
 ALTER TABLE memory_atoms
 ADD COLUMN IF NOT EXISTS context_summary text;
 
+-- Authority is deliberately separate from confidence and lifecycle. A record can
+-- be active and high-confidence without having passed human/editorial review.
+ALTER TABLE memory_atoms
+    ADD COLUMN IF NOT EXISTS authority_status TEXT NOT NULL DEFAULT 'unreviewed'
+        CHECK (authority_status IN ('unreviewed', 'approved', 'rejected')),
+    ADD COLUMN IF NOT EXISTS authority_reviewed_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS authority_reviewer TEXT;
+
 ALTER TABLE memory_atoms
 ADD COLUMN IF NOT EXISTS topic_tags TEXT[] NOT NULL DEFAULT '{}';
 
@@ -98,6 +106,9 @@ CREATE TABLE IF NOT EXISTS memory_proposals (
     relationship          TEXT NOT NULL,
     reconciliation_reason TEXT,
     matched_memory_ids    JSONB,
+    visibility            TEXT NOT NULL DEFAULT 'private'
+        CHECK (visibility IN ('private', 'team', 'public')),
+    source_user_id        TEXT,
 
     -- CLI-issued approval token (single-use, time-limited)
     approval_token        TEXT,
@@ -122,6 +133,59 @@ ALTER TABLE memory_atoms
     ADD COLUMN IF NOT EXISTS lifecycle_updated_at   TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_memory_atoms_lifecycle_status ON memory_atoms(lifecycle_status);
+CREATE INDEX IF NOT EXISTS idx_memory_atoms_authority_scope
+    ON memory_atoms (scope, authority_status, lifecycle_status);
+
+-- Access tracking: lazy decay computes effective confidence at read time from these fields.
+-- last_accessed_at + access_count enable: decay formula at retrieval, annual purge of dead atoms.
+ALTER TABLE memory_atoms
+    ADD COLUMN IF NOT EXISTS last_accessed_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS access_count     INTEGER NOT NULL DEFAULT 0;
+
+-- Visibility: user-set access boundary. Scope emerges from source data; visibility is explicit.
+-- private = only this user, team = auth group, public = open pool.
+ALTER TABLE memory_atoms
+    ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'private'
+        CHECK (visibility IN ('private', 'team', 'public'));
+
+-- Source user identity on signals: enables unique_source_count and spam detection.
+ALTER TABLE memory_signals
+    ADD COLUMN IF NOT EXISTS source_user_id TEXT;
+
+-- Unique source count: how many distinct users have written signals for this atom.
+-- Populated by recompute_atom_weights(). Boosts retrieval_priority for multi-user facts.
+ALTER TABLE memory_atoms
+    ADD COLUMN IF NOT EXISTS unique_source_count INTEGER NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_memory_atoms_last_accessed_at   ON memory_atoms(last_accessed_at);
+CREATE INDEX IF NOT EXISTS idx_memory_atoms_visibility          ON memory_atoms(visibility);
+CREATE INDEX IF NOT EXISTS idx_memory_atoms_unique_source_count ON memory_atoms(unique_source_count);
+CREATE INDEX IF NOT EXISTS idx_memory_signals_source_user_id    ON memory_signals(source_user_id);
+
+-- Users: identity anchor for multi-user attribution.
+-- Not an auth system — passwords/sessions belong in the dashboard web layer.
+CREATE TABLE IF NOT EXISTS users (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    username        TEXT        NOT NULL UNIQUE,
+    email           TEXT        UNIQUE,
+    display_name    TEXT,
+    password_hash   TEXT,
+    api_token       TEXT        UNIQUE DEFAULT gen_random_uuid()::text,
+    is_admin        BOOLEAN     NOT NULL DEFAULT false,
+    is_active       BOOLEAN     NOT NULL DEFAULT true,
+    usefulness_score FLOAT      NOT NULL DEFAULT 0.0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_users_username       ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_email          ON users(email);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_token ON users(api_token);
+CREATE INDEX IF NOT EXISTS idx_users_usefulness_score ON users(usefulness_score DESC);
+
+-- Default local user so source_user_id='local_user' signals can be resolved.
+INSERT INTO users (username, display_name, is_admin, created_at)
+VALUES ('local_user', 'Local User', true, now())
+ON CONFLICT (username) DO NOTHING;
 
 -- Phase 7: task_runs — per-task provenance for reflect_task.py runs.
 -- For existing databases apply db/migrations/005_add_task_runs.sql instead.

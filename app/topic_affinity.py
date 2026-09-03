@@ -36,7 +36,7 @@ def get_user_topic_tags(username: str, db_url: str) -> list[str]:
         return []
     try:
         import psycopg
-        with psycopg.connect(db_url) as conn:
+        with psycopg.connect(db_url, connect_timeout=3) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -112,7 +112,7 @@ def find_users_with_affinity(
     patterns = [f"%{t}%" for t in tags[:5]]
     try:
         import psycopg
-        with psycopg.connect(db_url) as conn:
+        with psycopg.connect(db_url, connect_timeout=3) as conn:
             with conn.cursor() as cur:
                 # Find users who have atoms containing any of the tag words
                 cur.execute(

@@ -15,6 +15,8 @@ def propose_memory_signal(
     importance: float = 0.5,
     reconciliation_reason: str | None = None,
     matched_memory_ids: list[str] | None = None,
+    visibility: str = "private",
+    source_user_id: str | None = None,
 ) -> dict[str, Any]:
     """Queue a confirmation-path candidate for human review and return a proposal ID.
 
@@ -52,8 +54,14 @@ def propose_memory_signal(
             importance=importance,
             reconciliation_reason=reconciliation_reason,
             matched_memory_ids=matched_memory_ids,
+            visibility=visibility,
+            source_user_id=source_user_id,
         )
-        return {"proposal_id": proposal_id, "status": "pending_review"}
+        return {
+            "proposal_id": proposal_id,
+            "status": "pending_review",
+            "visibility": visibility if visibility in ("private", "team", "public") else "private",
+        }
     except Exception as exc:
         return {"error": f"failed to queue proposal: {exc}"}
 
