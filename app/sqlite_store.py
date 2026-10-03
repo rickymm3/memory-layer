@@ -1533,7 +1533,7 @@ class SQLiteStore:
         requesting_user: str | None = None,  # single-user backend: no access filter
     ) -> dict[str, Any]:
         """Retrieve current atoms plus semantically relevant historical atoms."""
-        embedding = get_embedding_client().embed_text(query)
+        embedding = self.ollama.embed_text(query)
         threshold = min_similarity if min_similarity is not None else 0.3
 
         with self._connect() as conn:
