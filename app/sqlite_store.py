@@ -441,11 +441,12 @@ class SQLiteStore:
 
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, memory_type FROM memory_atoms WHERE id = ?;", (atom_id,)
+                "SELECT id, memory_type, visibility FROM memory_atoms WHERE id = ?;", (atom_id,)
             ).fetchone()
             if row is None:
                 return None
             atom_memory_type = row[1]
+            atom_visibility = row[2]
 
             signal_rows = conn.execute(
                 "SELECT relationship, confidence, source_key, created_at, source_user_id FROM memory_signals WHERE memory_atom_id = ?;",
@@ -470,7 +471,12 @@ class SQLiteStore:
             }
             for r in signal_rows
         ]
-        weights = compute_atom_weights(signals, memory_type=atom_memory_type, source_trust=source_trust)
+        weights = compute_atom_weights(
+            signals,
+            memory_type=atom_memory_type,
+            source_trust=source_trust,
+            visibility=atom_visibility,
+        )
 
         now = _now()
         with self._connect() as conn:

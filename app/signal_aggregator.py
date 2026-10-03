@@ -110,6 +110,7 @@ def compute_atom_weights(
     signals: list[dict[str, Any]],
     memory_type: str | None = None,
     source_trust: dict[str, float] | None = None,
+    visibility: str | None = None,
 ) -> dict[str, float]:
     """Compute aggregated weights from a memory atom's signal history.
 
@@ -128,6 +129,13 @@ def compute_atom_weights(
             by compute_source_trust().  Missing keys default to 1.0 (full trust).
             Adversarial sources receive SOURCE_TRUST_FLOOR, which reduces their
             contribution without silencing them entirely.
+        visibility: The atom's visibility. Decides what counts as one source:
+            private/team atoms count repeats per person (source_user_id), so
+            two teammates on the same client are two voices. Public atoms
+            count repeats per source_key (client/tool), because public
+            identities are cheap: a burst of new accounts through one tool is
+            treated as one source until an identity-cost or independence
+            signal exists.
 
     Returns:
         {
@@ -166,10 +174,11 @@ def compute_atom_weights(
         identity = (sig.get("source_user_id") or source_key).strip()
         unique_identities.add(identity)
 
-        # Repeats are counted per identity, not per tool: two users writing
-        # through the same client (source_key 'local_user') are two sources.
-        n = source_counts.get(identity, 0)
-        source_counts[identity] = n + 1
+        # What counts as "the same source" depends on the trust boundary:
+        # per person inside private/team scopes, per tool in the public pool.
+        decay_key = source_key if visibility == "public" else identity
+        n = source_counts.get(decay_key, 0)
+        source_counts[decay_key] = n + 1
 
         # Geometric source decay: first from this source = 1.0, second = 0.5, …
         source_decay = 0.5 ** n

@@ -223,13 +223,14 @@ class MemoryStore:
         with psycopg.connect(self.config.database_url) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, memory_type FROM memory_atoms WHERE id = %s;",
+                    "SELECT id, memory_type, visibility FROM memory_atoms WHERE id = %s;",
                     (atom_id,),
                 )
                 atom_row = cur.fetchone()
                 if atom_row is None:
                     return None
                 atom_memory_type: str | None = atom_row[1]
+                atom_visibility: str | None = atom_row[2]
 
                 cur.execute(
                     """
@@ -271,7 +272,12 @@ class MemoryStore:
                 for row in rows
             ]
 
-            weights = compute_atom_weights(signals, memory_type=atom_memory_type, source_trust=source_trust)
+            weights = compute_atom_weights(
+                signals,
+                memory_type=atom_memory_type,
+                source_trust=source_trust,
+                visibility=atom_visibility,
+            )
 
             with conn.cursor() as cur:
                 cur.execute(

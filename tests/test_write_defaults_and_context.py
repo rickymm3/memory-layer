@@ -97,6 +97,22 @@ def test_two_users_through_one_client_are_two_sources():
     assert w["unique_source_count"] == 2
 
 
+def test_public_pool_counts_one_tool_as_one_source():
+    now = datetime.now(timezone.utc)
+    burst = [
+        {"relationship": "new", "confidence": 0.8, "source_key": "local_user",
+         "source_user_id": f"new-account-{i}", "created_at": now}
+        for i in range(5)
+    ]
+    team = compute_atom_weights(burst, memory_type="fact", visibility="team")
+    public = compute_atom_weights(burst, memory_type="fact", visibility="public")
+    # Team: five people, full weight each. Public: five accounts through one
+    # tool decay geometrically, so the burst cannot buy corroboration.
+    assert abs(team["support_weight"] - 4.0) < 1e-6
+    assert public["support_weight"] < 1.6
+    assert public["unique_source_count"] == 5  # still recorded for forensics
+
+
 def test_is_conflicted_threshold():
     assert is_conflicted({"lifecycle_status": "contested"})
     assert is_conflicted({"disagreement_score": 0.41})
