@@ -7,7 +7,8 @@ Connects Claude Code (and Claude Desktop) to your Synapse memory layer. Once con
 | Component | What it does |
 |---|---|
 | **MCP server** | Exposes `memory_store_auto`, `memory_search`, `memory_task_context`, and other tools to Claude |
-| **Session hook** | Injects relevant memory context at the start of each conversation turn |
+| **Load hooks** | `SessionStart` (also after compaction) injects this project's memory: project facts, your cross-project preferences, model lessons, and contested claims with both sides. `UserPromptSubmit` adds only the atoms relevant to the prompt. |
+| **Save hooks** | `PreCompact` and `SessionEnd` send the turns since the last save to `memory_push_conversation`, which extracts durable atoms through the commit pipeline. Atoms are private and scoped to this project unless the extractor scoped them `user`. |
 | `/synapse:recall` | Skill to explicitly search past decisions and preferences |
 
 ## Quick start
@@ -49,6 +50,13 @@ The plugin reads two env vars:
 |---|---|
 | `MEMORY_LAYER_URL` | Full URL to your Synapse MCP endpoint, e.g. `http://192.168.1.10:5000/mcp/sse` |
 | `MEMORY_LAYER_TOKEN` | Your API token from Synapse `/settings` |
+
+Optional:
+
+| Variable | Description |
+|---|---|
+| `SYNAPSE_PROJECT_SCOPE` | Override the project scope. Default: `project:<git repo name>` of the session's working directory |
+| `SYNAPSE_MODEL_SCOPE` | Load model lessons for this scope, e.g. `model:claude-sonnet-4-6` |
 
 `node setup.js` writes these to `~/.synapse/config` and appends exports to your shell profile. If you prefer to set them manually, add to `~/.bashrc` or `~/.zshrc`:
 

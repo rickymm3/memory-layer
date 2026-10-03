@@ -9,6 +9,12 @@ import psycopg
 
 from app.config import get_config
 from app.llm_provider import LLMProvider, get_embedding_client, get_llm_client
+from app.retrieval_policy import (
+    COMPOSITE_SQL,
+    CONFLICT_THRESHOLD,
+    access_clause,
+    attach_conflicts,
+)
 
 # Memory types whose changes are tracked in belief_revision_log.
 # These represent judgment / opinion rather than fixed fact.
@@ -142,9 +148,9 @@ class MemoryStore:
                     INSERT INTO memory_atoms (
                         content, context_summary, memory_type, scope,
                         confidence, importance, embedding_model, embedding,
-                        source_type, source_url, visibility
+                        source_type, source_url, visibility, source_user_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector, %s, %s, %s, %s)
                     RETURNING id;
                     """,
                     (
@@ -159,6 +165,7 @@ class MemoryStore:
                         _atom_source_type,
                         source_url,
                         _visibility,
+                        source_user_id,
                     ),
                 )
                 memory_id = cur.fetchone()[0]
@@ -339,10 +346,11 @@ class MemoryStore:
                         importance,
                         1 - (embedding <=> %s::vector) AS similarity
                     FROM memory_atoms
+                    WHERE embedding_model = %s
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s;
                     """,
-                    (embedding_literal, embedding_literal, limit),
+                    (embedding_literal, self.config.embedding_model, embedding_literal, limit),
                 )
                 rows = cur.fetchall()
 
@@ -507,13 +515,33 @@ class MemoryStore:
 
         return None
 
-    def find_exact_content_match(self, content: str) -> dict[str, Any] | None:
+    def find_exact_content_match(
+        self,
+        content: str,
+        scope: str | None = None,
+        requesting_user: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Most recent atom with the same normalized text.
+
+        When scope is given, only atoms in that scope match. When requesting_user
+        is given, only atoms that user can read match, so a write never reinforces
+        another user's private atom.
+        """
         normalized_content = self._normalize_text(content)
+        extra_sql = ""
+        extra_params: tuple = ()
+        if scope:
+            extra_sql += " AND scope = %s"
+            extra_params += (scope,)
+        acc_sql, acc_params = access_clause(requesting_user)
+        if acc_sql:
+            extra_sql += f" AND {acc_sql}"
+            extra_params += acc_params
 
         with psycopg.connect(self.config.database_url) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     SELECT
                         id,
                         content,
@@ -525,10 +553,11 @@ class MemoryStore:
                         created_at
                     FROM memory_atoms
                     WHERE lower(regexp_replace(btrim(content), '\\s+', ' ', 'g')) = %s
+                      {extra_sql}
                     ORDER BY created_at DESC
                     LIMIT 1;
                     """,
-                    (normalized_content,),
+                    (normalized_content, *extra_params),
                 )
                 row = cur.fetchone()
 
@@ -882,7 +911,19 @@ class MemoryStore:
         min_similarity: float | None = None,
         scope_filter: str | None = None,
         scope_filters: list[str] | None = None,
+        requesting_user: str | None = None,
+        include_conflicts: bool = True,
     ) -> list[dict[str, Any]]:
+        """Rank active atoms for a query.
+
+        - Only atoms embedded with the configured embedding model are compared;
+          vectors from another model live in a different space.
+        - A scope filter matches those scopes exactly. Unscoped (NULL) atoms
+          are not a wildcard; pass 'global' explicitly to include global atoms.
+        - requesting_user applies the visibility access rule.
+        - Contested atoms (or disagreement above CONFLICT_THRESHOLD) carry a
+          'conflict' key with the attributed supporting and opposing claims.
+        """
         # Normalise singular/plural scope args into one list.
         all_scopes: list[str] | None = None
         if scope_filters:
@@ -894,9 +935,15 @@ class MemoryStore:
         embedding_literal = self._vector_literal(embedding)
         threshold = min_similarity if min_similarity is not None else self.config.memory_retrieval_threshold
 
-        # Scope clause uses ANY() for multi-scope; values go through %s parameterisation.
-        scope_clause = "AND (scope = ANY(%s::text[]) OR scope IS NULL OR scope = 'global')" if all_scopes else ""
-        scope_params: tuple = (all_scopes,) if all_scopes else ()
+        filter_sql = ""
+        filter_params: tuple = ()
+        if all_scopes:
+            filter_sql += " AND scope = ANY(%s::text[])"
+            filter_params += (all_scopes,)
+        acc_sql, acc_params = access_clause(requesting_user)
+        if acc_sql:
+            filter_sql += f" AND {acc_sql}"
+            filter_params += acc_params
 
         with psycopg.connect(self.config.database_url) as conn:
             with conn.cursor() as cur:
@@ -919,31 +966,27 @@ class MemoryStore:
                             support_weight,
                             opposition_weight,
                             disagreement_score,
-                            COALESCE(unique_source_count, 0) AS unique_source_count
+                            COALESCE(unique_source_count, 0) AS unique_source_count,
+                            retrieval_priority
                         FROM memory_atoms
                         WHERE (lifecycle_status IS NULL
                                OR lifecycle_status NOT IN ('superseded', 'deprecated', 'archived'))
-                          {scope_clause}
+                          AND embedding_model = %s
+                          {filter_sql}
                     )
-                    SELECT *,
-                        (
-                            similarity * 0.60
-                            + confidence * 0.25
-                            - COALESCE(disagreement_score, 0.0) * 0.15
-                            + LN(GREATEST(1, unique_source_count)) * 0.02
-                        ) * CASE
-                            WHEN memory_type IN ('opinion','preference','lesson','belief')
-                            THEN GREATEST(0.3, EXP(
-                                -LN(2) * EXTRACT(EPOCH FROM (NOW() - created_at)) / (90.0 * 86400)
-                            ))
-                            ELSE 1.0
-                        END AS composite_score
+                    SELECT *, {COMPOSITE_SQL} AS composite_score
                     FROM scored
                     WHERE similarity >= %s
                     ORDER BY composite_score DESC
                     LIMIT %s;
                     """,
-                    (embedding_literal, *scope_params, threshold, limit),
+                    (
+                        embedding_literal,
+                        self.config.embedding_model,
+                        *filter_params,
+                        threshold,
+                        limit,
+                    ),
                 )
                 rows = cur.fetchall()
 
@@ -963,16 +1006,20 @@ class MemoryStore:
                     "confidence": float(row[5]),
                     "importance": float(row[6]),
                     "similarity": float(row[7]),
-                    "composite_score": round(float(row[14]), 4),
+                    "composite_score": round(float(row[15]), 4),
                     "created_at": row[8].isoformat() if row[8] is not None else None,
                     "lifecycle_status": row[9] or "active",
                     "support_weight": float(row[10]) if row[10] is not None else 0.0,
                     "opposition_weight": float(row[11]) if row[11] is not None else 0.0,
                     "disagreement_score": ds,
-                    "disagreement_flag": ds >= 0.5,
+                    "disagreement_flag": ds > CONFLICT_THRESHOLD,
                     "unique_source_count": int(row[13]) if row[13] is not None else 0,
+                    "retrieval_priority": float(row[14]) if row[14] is not None else 1.0,
                 }
             )
+
+        if include_conflicts:
+            self.attach_conflicts(results)
 
         # Update access tracking for lazy decay: record that these atoms were retrieved.
         # Never-accessed atoms are candidates for annual purge. Decay formula reads
@@ -995,6 +1042,101 @@ class MemoryStore:
                 pass  # access tracking failure must never block retrieval
 
         return results
+
+    def readable_atom_ids(
+        self, atom_ids: list[str], requesting_user: str | None
+    ) -> set[str]:
+        """Subset of atom_ids that requesting_user may read (all when None)."""
+        ids = [str(i) for i in atom_ids if i]
+        if not ids:
+            return set()
+        acc_sql, acc_params = access_clause(requesting_user)
+        if not acc_sql:
+            return set(ids)
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT id::text FROM memory_atoms "
+                    f"WHERE id = ANY(%s::uuid[]) AND {acc_sql};",
+                    (ids, *acc_params),
+                )
+                return {r[0] for r in cur.fetchall()}
+
+    def add_scope_member(self, scope: str, user_id: str, role: str = "member") -> None:
+        """Grant user_id read access to visibility='team' atoms in scope."""
+        with psycopg.connect(self.config.database_url) as conn:
+            conn.execute(
+                "INSERT INTO scope_members (scope, user_id, role) VALUES (%s, %s, %s) "
+                "ON CONFLICT (scope, user_id) DO UPDATE SET role = EXCLUDED.role;",
+                (scope, user_id, role),
+            )
+            conn.commit()
+
+    def remove_scope_member(self, scope: str, user_id: str) -> bool:
+        with psycopg.connect(self.config.database_url) as conn:
+            cur = conn.execute(
+                "DELETE FROM scope_members WHERE scope = %s AND user_id = %s;",
+                (scope, user_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def get_conflict_claims(
+        self, atom_ids: list[str], per_side: int = 3
+    ) -> dict[str, dict[str, list[dict[str, Any]]]]:
+        """Return the attributed claims on each side of each atom.
+
+        Supporting signals are new/reinforcement/refinement; opposing signals
+        are conflict/opinion_change (same split as signal_aggregator). Each
+        claim carries its own text and who asserted it, newest first.
+        """
+        from app.signal_aggregator import AGREEING, CONFLICTING
+
+        out: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        if not atom_ids:
+            return out
+        with psycopg.connect(self.config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT memory_atom_id::text, relationship, content,
+                           COALESCE(source_user_id, source_key), created_at, confidence
+                    FROM (
+                        SELECT s.*,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY memory_atom_id,
+                                       (relationship = ANY(%s::text[]))
+                                   ORDER BY created_at DESC
+                               ) AS rn
+                        FROM memory_signals s
+                        WHERE memory_atom_id = ANY(%s::uuid[])
+                          AND relationship = ANY(%s::text[])
+                    ) ranked
+                    WHERE rn <= %s
+                    ORDER BY memory_atom_id, created_at ASC;
+                    """,
+                    (
+                        list(CONFLICTING),
+                        atom_ids,
+                        list(AGREEING | CONFLICTING),
+                        per_side,
+                    ),
+                )
+                rows = cur.fetchall()
+        for atom_id, rel, content, source, created_at, conf in rows:
+            side = "opposing" if rel in CONFLICTING else "supporting"
+            entry = out.setdefault(atom_id, {"supporting": [], "opposing": []})
+            entry[side].append({
+                "content": content,
+                "source": source,
+                "relationship": rel,
+                "created_at": created_at.isoformat() if created_at else None,
+                "confidence": float(conf) if conf is not None else None,
+            })
+        return out
+
+    def attach_conflicts(self, atoms: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return attach_conflicts(self, atoms)
 
     def store_context_trace(self, trace: dict[str, Any]) -> str:
         """Insert a runtime context trace record. Returns the trace UUID."""
@@ -1567,12 +1709,15 @@ class MemoryStore:
         limit: int = 10,
         min_importance: float = 0.6,
         min_confidence: float = 0.7,
+        requesting_user: str | None = None,
     ) -> list[dict[str, Any]]:
         """Return high-importance, high-confidence active atoms for a scope."""
+        acc_sql, acc_params = access_clause(requesting_user)
+        acc_sql = f"AND {acc_sql}" if acc_sql else ""
         with psycopg.connect(self.config.database_url) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     SELECT id, content, context_summary, memory_type, scope,
                            confidence, importance, created_at,
                            support_weight, opposition_weight, disagreement_score,
@@ -1582,22 +1727,25 @@ class MemoryStore:
                     FROM memory_atoms
                     WHERE scope = %s AND importance >= %s AND confidence >= %s
                       AND lifecycle_status = 'active'
+                      {acc_sql}
                     ORDER BY importance DESC, confidence DESC, created_at DESC
                     LIMIT %s;
                     """,
-                    (scope, min_importance, min_confidence, limit),
+                    (scope, min_importance, min_confidence, *acc_params, limit),
                 )
                 rows = cur.fetchall()
         return [_pg_atom_row_to_dict(r) for r in rows]
 
     def get_active_atoms_by_scope(
-        self, scope: str, limit: int = 20
+        self, scope: str, limit: int = 20, requesting_user: str | None = None
     ) -> list[dict[str, Any]]:
         """Return all active atoms for a scope (used for model_lessons)."""
+        acc_sql, acc_params = access_clause(requesting_user)
+        acc_sql = f"AND {acc_sql}" if acc_sql else ""
         with psycopg.connect(self.config.database_url) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     SELECT id, content, context_summary, memory_type, scope,
                            confidence, importance, created_at,
                            support_weight, opposition_weight, disagreement_score,
@@ -1606,10 +1754,11 @@ class MemoryStore:
                            retrieval_priority, lifecycle_updated_at
                     FROM memory_atoms
                     WHERE scope = %s AND lifecycle_status = 'active'
+                      {acc_sql}
                     ORDER BY importance DESC, confidence DESC, created_at DESC
                     LIMIT %s;
                     """,
-                    (scope, limit),
+                    (scope, *acc_params, limit),
                 )
                 rows = cur.fetchall()
         return [_pg_atom_row_to_dict(r) for r in rows]
@@ -1702,12 +1851,14 @@ class MemoryStore:
                     JOIN memory_atoms b ON a.id < b.id
                     WHERE a.lifecycle_status = 'active'
                       AND b.lifecycle_status = 'active'
+                      AND a.embedding_model = %s
+                      AND b.embedding_model = a.embedding_model
                       {scope_clause}
                       AND (a.embedding <=> b.embedding) <= %s
                     ORDER BY similarity DESC
                     LIMIT %s;
                     """,
-                    (*scope_param, threshold_as_distance, limit),
+                    (self.config.embedding_model, *scope_param, threshold_as_distance, limit),
                 )
                 rows = cur.fetchall()
 
@@ -2029,6 +2180,7 @@ class MemoryStore:
         history_limit: int = 3,
         scope_filter: str | None = None,
         min_similarity: float | None = None,
+        requesting_user: str | None = None,
     ) -> dict[str, Any]:
         """Retrieve current atoms plus semantically relevant historical atoms.
 
@@ -2043,8 +2195,15 @@ class MemoryStore:
         embedding_literal = self._vector_literal(embedding)
         threshold = min_similarity if min_similarity is not None else self.config.memory_retrieval_threshold
 
-        scope_clause = "AND (scope = %s OR scope IS NULL OR scope = 'global')" if scope_filter else ""
-        scope_params: tuple = (scope_filter,) if scope_filter else ()
+        scope_clause = "AND embedding_model = %s"
+        scope_params: tuple = (self.config.embedding_model,)
+        if scope_filter:
+            scope_clause += " AND scope = %s"
+            scope_params += (scope_filter,)
+        acc_sql, acc_params = access_clause(requesting_user)
+        if acc_sql:
+            scope_clause += f" AND {acc_sql}"
+            scope_params += acc_params
 
         with psycopg.connect(self.config.database_url) as conn:
             with conn.cursor() as cur:
@@ -2058,19 +2217,12 @@ class MemoryStore:
                                created_at, lifecycle_status, support_weight,
                                opposition_weight, disagreement_score,
                                peak_confidence, peak_support_weight,
-                               lifecycle_updated_at
+                               lifecycle_updated_at, retrieval_priority
                         FROM memory_atoms
                         WHERE lifecycle_status IN ('active', 'belief')
                           {scope_clause}
                     )
-                    SELECT *,
-                        (similarity * 0.60 + confidence * 0.25
-                         - COALESCE(disagreement_score, 0.0) * 0.15)
-                        * CASE WHEN memory_type IN ('opinion','preference','lesson','belief')
-                               THEN GREATEST(0.3, EXP(
-                                   -LN(2) * EXTRACT(EPOCH FROM (NOW() - created_at)) / (90.0 * 86400)
-                               ))
-                               ELSE 1.0 END AS composite_score
+                    SELECT *, {COMPOSITE_SQL} AS composite_score
                     FROM scored
                     WHERE similarity >= %s
                     ORDER BY composite_score DESC
@@ -2306,33 +2458,39 @@ class MemoryStore:
         embedding_literal = self._vector_literal(embedding)
         clamped_min_similarity = max(0.0, min(float(min_similarity), 1.0))
 
-        where_clauses: list[str] = ["lifecycle_status != 'archived'"]
-        filter_params: list[Any] = []
+        where_clauses: list[str] = ["lifecycle_status != 'archived'", "embedding_model = %s"]
+        filter_params: list[Any] = [self.config.embedding_model]
         if scope:
             where_clauses.append("scope = %s")
             filter_params.append(scope)
         if memory_type:
             where_clauses.append("memory_type = %s")
             filter_params.append(memory_type)
-        if requesting_user:
-            where_clauses.append("(visibility = 'public' OR source_user_id = %s)")
-            filter_params.append(requesting_user)
+        acc_sql, acc_params = access_clause(requesting_user)
+        if acc_sql:
+            where_clauses.append(acc_sql)
+            filter_params.extend(acc_params)
         where_sql = "WHERE " + " AND ".join(where_clauses)
-        params: list[Any] = [embedding_literal] + filter_params + [embedding_literal, limit]
+        params: list[Any] = [embedding_literal] + filter_params + [clamped_min_similarity, limit]
 
         with psycopg.connect(self.config.database_url) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT id, content, context_summary, memory_type, scope,
-                           confidence, importance,
-                           1 - (embedding <=> %s::vector) AS similarity,
-                           created_at, support_weight, opposition_weight,
-                           disagreement_score, last_recomputed_at,
-                           lifecycle_status, superseded_by_atom_id, lifecycle_reason,
-                           retrieval_priority, lifecycle_updated_at
-                    FROM memory_atoms {where_sql}
-                    ORDER BY embedding <=> %s::vector LIMIT %s;
+                    WITH scored AS (
+                        SELECT id, content, context_summary, memory_type, scope,
+                               confidence, importance,
+                               1 - (embedding <=> %s::vector) AS similarity,
+                               created_at, support_weight, opposition_weight,
+                               disagreement_score, last_recomputed_at,
+                               lifecycle_status, superseded_by_atom_id, lifecycle_reason,
+                               retrieval_priority, lifecycle_updated_at
+                        FROM memory_atoms {where_sql}
+                    )
+                    SELECT *, {COMPOSITE_SQL} AS composite_score
+                    FROM scored
+                    WHERE similarity >= %s
+                    ORDER BY composite_score DESC LIMIT %s;
                     """,
                     tuple(params),
                 )
@@ -2393,7 +2551,8 @@ class MemoryStore:
                 "opposition_weight": float(row[10]),
                 "disagreement_score": ds,
                 "last_recomputed_at": row[12].isoformat() if row[12] else None,
-                "disagreement_flag": ds >= 0.5,
+                "disagreement_flag": ds > CONFLICT_THRESHOLD,
+                "composite_score": round(float(row[18]), 4),
                 "lifecycle_status": row[13],
                 "superseded_by_atom_id": str(row[14]) if row[14] else None,
                 "lifecycle_reason": row[15],
@@ -2401,6 +2560,7 @@ class MemoryStore:
                 "lifecycle_updated_at": row[17].isoformat() if row[17] else None,
                 "signals_summary": sigs.get(str(row[0]), _empty),
             })
+        self.attach_conflicts(results)
         return results
 
     def log_conversation_turn(

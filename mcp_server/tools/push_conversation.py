@@ -20,6 +20,7 @@ def push_conversation_tool(
     transcript: str,
     source_user_id: str | None = None,
     is_jsonl_path: bool = False,
+    default_scope: str | None = None,
 ) -> dict[str, Any]:
     """Commit all turns in a conversation transcript to memory atoms.
 
@@ -30,6 +31,7 @@ def push_conversation_tool(
         source_user_id: Username to tag committed atoms with.
         is_jsonl_path: When True, treat transcript as a filesystem path
             to a Claude Code session .jsonl file.
+        default_scope: Scope for extracted atoms the extractor left unscoped.
 
     Returns:
         Summary dict with committed_atoms, proposed_atoms, skipped_turns counts.
@@ -49,6 +51,7 @@ def push_conversation_tool(
             username=source_user_id,
             dry_run=False,
             verbose=False,
+            default_scope=default_scope,
         )
     finally:
         # Clean up temp file if we created one

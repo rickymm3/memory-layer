@@ -98,6 +98,7 @@ def push_conversation(
     username: str | None = None,
     dry_run: bool = False,
     verbose: bool = False,
+    default_scope: str | None = None,
 ) -> dict:
     """Process all turns in a session JSONL and commit atoms + queue post drafts.
 
@@ -151,6 +152,7 @@ def push_conversation(
                 thinking="",
                 answer=assistant_msg,
                 source_user_id=username,
+                default_scope=default_scope,
             )
             turn_committed = result.get("committed", [])
             turn_proposed = result.get("proposed", [])

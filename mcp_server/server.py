@@ -38,13 +38,28 @@ from mcp_server.tools.find_duplicates import find_duplicate_atoms
 from mcp_server.tools.link_atoms import link_atoms
 from mcp_server.tools.related_atoms import get_related_atoms
 from mcp_server.tools.push_conversation import push_conversation_tool
+from app.retrieval_policy import MIN_SIMILARITY_DEFAULT
 
-_WRITE_PROTOCOL = """After any turn where the user expressed a preference, correction, decision, or instruction:
-1. Call memory_store_auto BEFORE finishing your response — not at end-of-session.
-2. Report both memory_atom_id and memory_signal_id.
-3. Scope: project facts → 'project:<name>', model observations → 'model:claude-sonnet-4-6', user preferences → 'user'.
-4. Content must be self-contained — no session-internal names like "Phase N" or "as discussed".
-Triggers: preferences with reasons, architecture decisions, corrections, frustration/satisfaction signals."""
+_WRITE_PROTOCOL = """This server is persistent memory that outlives the context window.
+
+LOAD — before any other tool call in a session, call memory_task_context with
+project_scope='project:<name>' (the repo or project you are working in) and a
+one-sentence task_hint. If a host hook already injected a "MEMORY — SESSION
+CONTEXT" block, that call has been made for you.
+
+SAVE — before you end a turn in which the user made a decision, stated a
+constraint or preference, or corrected you, call memory_store_auto:
+- scope is required: 'project:<name>' for project facts, 'user' for the
+  user's cross-project preferences, 'model:<id>' for observations about you.
+- visibility defaults to private. Use 'team' only for scopes shared with
+  teammates, and 'public' only when the user asks to publish.
+- content is one self-contained sentence that would still be true and useful
+  in a different chat. No "as discussed", "Phase N", or session-only detail.
+- skip questions, restatements of the current task, and pleasantries.
+- report memory_atom_id and memory_signal_id.
+
+CONFLICTS — a result carrying a 'conflict' block is contested. Do not treat
+it as settled: report each claim with who made it and when."""
 
 mcp = FastMCP("memoryLayer", instructions=_WRITE_PROTOCOL)
 
@@ -65,7 +80,7 @@ def memory_search(
     limit: int = 5,
     scope: str | None = None,
     memory_type: str | None = None,
-    min_similarity: float = 0.0,
+    min_similarity: float = MIN_SIMILARITY_DEFAULT,
 ) -> list[dict[str, Any]]:
     """Search memory atoms by semantic similarity.
 
@@ -78,7 +93,10 @@ def memory_search(
         limit: Maximum results to return. Clamped to 1–20. Default 5.
         scope: Optional scope filter (e.g. 'project:memory-layer', 'model:claude-sonnet-4-6').
         memory_type: Optional type filter (e.g. 'fact', 'decision', 'observation').
-        min_similarity: Minimum cosine similarity (0.0–1.0). Default 0.0.
+        min_similarity: Minimum cosine similarity (0.0–1.0). Default 0.35.
+
+    Contested atoms include a 'conflict' block listing the supporting and
+    opposing claims with who made each one.
     """
     return search_memories(
         query=query,
@@ -94,14 +112,14 @@ def memory_store_auto(
     content: str,
     memory_type: str,
     relationship: str,
+    scope: str,
     context_summary: str | None = None,
-    scope: str | None = None,
     confidence: float = 0.8,
     importance: float = 0.5,
     reconciliation_reason: str | None = None,
     matched_memory_ids: list[str] | None = None,
     source_user_id: str | None = None,
-    visibility: str = "public",
+    visibility: str = "private",
 ) -> dict[str, Any]:
     """Store a memory atom through the full commit pipeline.
 
@@ -119,18 +137,24 @@ def memory_store_auto(
         content: Full canonical sentence of the memory to store.
         memory_type: Type: fact | decision | instruction | observation | preference | correction.
         relationship: Reconciler hint: new | refinement | reinforcement | conflict | opinion_change.
+        scope: Required. 'project:<name>', 'user', or 'model:<id>'. An unscoped
+            atom would come back in every project, so writes without one are refused.
         context_summary: Compact prompt-friendly summary. Defaults to content.
-        scope: Scope string (e.g. 'project:memory-layer', 'model:claude-sonnet-4-6', 'user').
         confidence: Float 0.0–1.0. Default 0.8.
         importance: Float 0.0–1.0. Default 0.5.
         reconciliation_reason: Reason string from reconciler output.
         matched_memory_ids: Related existing atom UUIDs.
         source_user_id: User identity for multi-user provenance tracking.
-        visibility: Access boundary: private | team | public. Default public. Override to private only for passwords, PII, or sensitive personal details.
+        visibility: Access boundary: private | team | public. Default private.
+            'team' is readable by users added to this scope; 'public' is the open
+            pool and should be an explicit choice. The critic can still force
+            private for sensitive content.
     """
-    # Priority: explicit arg → SSE auth context → MEMORY_USER_ID env var (stdio mode)
+    # Priority: SSE auth context → explicit arg → MEMORY_USER_ID env var (stdio mode).
+    # The authenticated identity always wins: atom ownership drives read access,
+    # so a hosted caller must not be able to write as someone else.
     from mcp_server.auth_context import current_user_id as _uid_ctx  # noqa: PLC0415
-    effective_user = source_user_id or _uid_ctx.get() or os.environ.get("MEMORY_USER_ID")
+    effective_user = _uid_ctx.get() or source_user_id or os.environ.get("MEMORY_USER_ID")
 
     return store_memory_auto(
         content=content,
@@ -305,6 +329,7 @@ def memory_related(
 def memory_push_conversation(
     transcript: str,
     is_jsonl_path: bool = False,
+    scope: str | None = None,
 ) -> dict[str, Any]:
     """Push an entire conversation into memory atoms.
 
@@ -321,12 +346,15 @@ def memory_push_conversation(
             when is_jsonl_path=True.
         is_jsonl_path: Set True when transcript is a filesystem path to a
             Claude Code session .jsonl file (e.g. ~/.claude/projects/.../*.jsonl).
+        scope: Default scope (e.g. 'project:<name>') for extracted atoms that
+            the extractor did not scope itself.
     """
     from mcp_server.auth_context import current_user_id
     return push_conversation_tool(
         transcript=transcript,
-        source_user_id=current_user_id(),
+        source_user_id=current_user_id.get() or os.environ.get("MEMORY_USER_ID"),
         is_jsonl_path=is_jsonl_path,
+        default_scope=scope,
     )
 
 
@@ -336,8 +364,8 @@ _START_SESSION_TEXT = """\
 Before we begin — a quick heads-up on what this connection does:
 
 • What you share may be stored as memory atoms (your beliefs, preferences, decisions, experiences, facts)
-• Atoms can contribute to public posts on Synapse, visible to other users
-• Passwords, API keys, and private personal details are kept private automatically
+• Atoms are private to you unless you ask for one to be shared or published
+• Passwords, API keys, and private personal details are always kept private
 • You can say "keep this private" at any point to exclude something from storage
 
 Selecting this prompt means you're good with this for our conversation.
@@ -383,9 +411,8 @@ You're about to send this conversation retroactively to the Synapse memory layer
 
 What will happen:
 • The conversation is analyzed for durable memories — beliefs, decisions, preferences
-• Extracted atoms are stored as public by default
-• Passwords and private details are automatically kept private
-• Atoms may contribute to or update public posts on Synapse
+• Extracted atoms are stored as private by default
+• Passwords and private details are always kept private
 
 By proceeding you're consenting to this for the current conversation.
 

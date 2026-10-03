@@ -161,12 +161,15 @@ def compute_atom_weights(
             continue
 
         source_key = (sig.get("source_key") or "unknown").strip()
-        n = source_counts.get(source_key, 0)
-        source_counts[source_key] = n + 1
 
         # Track unique identities: prefer explicit source_user_id; fall back to source_key.
         identity = (sig.get("source_user_id") or source_key).strip()
         unique_identities.add(identity)
+
+        # Repeats are counted per identity, not per tool: two users writing
+        # through the same client (source_key 'local_user') are two sources.
+        n = source_counts.get(identity, 0)
+        source_counts[identity] = n + 1
 
         # Geometric source decay: first from this source = 1.0, second = 0.5, …
         source_decay = 0.5 ** n

@@ -1336,6 +1336,10 @@ def mcp_sse():
     _mcp_log = _logging.getLogger("mcp_sse")
     _mcp_log.info("mcp_sse tool=%s user=%s", tool, username)
 
+    # Tools read the requesting user from this context var to apply the
+    # visibility access rule; without it every read ran as the local admin.
+    from mcp_server.auth_context import current_user_id as _uid_ctx
+    _uid_token = _uid_ctx.set(username)
     try:
         result = _dispatch_mcp_tool(tool, args, username)
         _mcp_log.info("mcp_sse tool=%s user=%s status=ok", tool, username)
@@ -1346,10 +1350,13 @@ def mcp_sse():
     except Exception as exc:
         _mcp_log.warning("mcp_sse tool=%s user=%s status=error err=%s", tool, username, exc)
         return jsonify({"error": str(exc)}), 500
+    finally:
+        _uid_ctx.reset(_uid_token)
 
 
 def _dispatch_mcp_tool(tool: str, args: dict, username: str):
     """Route a tool name + args to the appropriate backend function."""
+    from app.retrieval_policy import MIN_SIMILARITY_DEFAULT
     if tool == "memory_health":
         from mcp_server.tools.health import get_memory_health
         return get_memory_health()
@@ -1361,7 +1368,7 @@ def _dispatch_mcp_tool(tool: str, args: dict, username: str):
             limit=int(args.get("limit", 5)),
             scope=args.get("scope"),
             memory_type=args.get("memory_type"),
-            min_similarity=float(args.get("min_similarity", 0.0)),
+            min_similarity=float(args.get("min_similarity", MIN_SIMILARITY_DEFAULT)),
         )
 
     if tool == "memory_store_auto":
@@ -1377,7 +1384,7 @@ def _dispatch_mcp_tool(tool: str, args: dict, username: str):
             reconciliation_reason=args.get("reconciliation_reason"),
             matched_memory_ids=args.get("matched_memory_ids"),
             source_user_id=username,
-            visibility=args.get("visibility", "public"),
+            visibility=args.get("visibility", "private"),
         )
 
     if tool == "memory_get":
@@ -1426,6 +1433,7 @@ def _dispatch_mcp_tool(tool: str, args: dict, username: str):
             transcript=args.get("transcript", ""),
             source_user_id=username,
             is_jsonl_path=bool(args.get("is_jsonl_path", False)),
+            default_scope=args.get("scope"),
         )
 
     raise ValueError(f"Unknown tool: {tool}")
@@ -1456,7 +1464,7 @@ def api_ingest():
     Body (JSON):
         content       str   required
         memory_type   str   optional (default: observation)
-        visibility    str   optional (default: public)
+        visibility    str   optional (default: private)
         scope         str   optional (default: user)
         source        str   optional (label for the originating tool/model)
     Returns: JSON write report with atom_id, signal_id, decision, quality_score.
@@ -1477,12 +1485,12 @@ def api_ingest():
         return jsonify({"error": "content is required"}), 400
 
     memory_type = body.get("memory_type", "observation")
-    visibility = body.get("visibility", "public")
+    visibility = body.get("visibility", "private")
     scope = body.get("scope") or "user"
     source_label = body.get("source", "api")
 
     if visibility not in ("public", "private", "team"):
-        visibility = "public"
+        visibility = "private"
 
     # ── Deterministic guardrail (credentials / secrets) ──
     from app.write_quality import score_write_quality
