@@ -29,30 +29,35 @@ def _load_env(project_dir: str) -> None:
                 os.environ.setdefault(k.strip(), v.strip())
 
 
+def _atom_text(atom, prefer_summary: bool = True) -> str:
+    """memory_task_context returns compact strings by default, dicts otherwise."""
+    if isinstance(atom, str):
+        return atom
+    if not isinstance(atom, dict):
+        return ""
+    text = (atom.get("context_summary") if prefer_summary else None) or atom.get("content") or ""
+    mtype = atom.get("memory_type", "")
+    return f"[{mtype}] {text}" if text else ""
+
+
 def _format_context(result: dict) -> str:
     lines = ["## MEMORY — SESSION CONTEXT (auto-loaded)"]
 
-    project = result.get("project_context") or []
-    if project:
-        lines.append("\n### Project Context")
-        for atom in project[:6]:
-            content = atom.get("context_summary") or atom.get("content") or ""
-            mtype = atom.get("memory_type", "")
-            if content:
-                lines.append(f"[{mtype}] {content}")
+    for title, key, cap in (
+        ("Project Context", "project_context", 6),
+        ("User Preferences", "user_context", 5),
+        ("Model Directives", "model_lessons", 5),
+    ):
+        items = [t for t in (_atom_text(a) for a in (result.get(key) or [])[:cap]) if t]
+        if items:
+            lines.append(f"\n### {title}")
+            lines.extend(items)
 
-    model_lessons = result.get("model_lessons") or []
-    if model_lessons:
-        lines.append("\n### Model Directives")
-        for atom in model_lessons[:5]:
-            content = atom.get("context_summary") or atom.get("content") or ""
-            if content:
-                lines.append(f"[directive] {content}")
-
-    write_protocol = result.get("write_protocol") or {}
-    mandate = write_protocol.get("mandate") or write_protocol.get("rule") or ""
-    if mandate:
-        lines.append(f"\n### Write Rule\n{mandate}")
+    write_protocol = result.get("write_protocol") or ""
+    if isinstance(write_protocol, dict):
+        write_protocol = write_protocol.get("mandate") or write_protocol.get("rule") or ""
+    if write_protocol:
+        lines.append(f"\n### Write Rule\n{write_protocol}")
     else:
         lines.append(
             "\n### Write Rule\n"

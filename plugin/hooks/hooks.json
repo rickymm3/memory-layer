@@ -1,14 +1,47 @@
 {
   "hooks": {
-    "UserPromptSubmit": [
+    "SessionStart": [
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "node hooks/session-start.js",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/memory-load.js\" SessionStart",
             "timeout": 10,
-            "statusMessage": "Pulling memory context..."
+            "statusMessage": "Loading memory..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/memory-load.js\" UserPromptSubmit",
+            "timeout": 8,
+            "statusMessage": "Pulling relevant memory..."
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/memory-flush.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/memory-flush.js\"",
+            "timeout": 10
           }
         ]
       }

@@ -18,6 +18,7 @@ def run_turn_reflection(
     answer: str,
     scope: str | None = None,
     source_user_id: str | None = None,
+    default_scope: str | None = None,
 ) -> dict[str, Any]:
     """Extract durable insights from a conversation turn and commit them.
 
@@ -31,6 +32,8 @@ def run_turn_reflection(
         thinking: Raw chain-of-thought text from <think> blocks, if any.
         answer: The assistant's final answer (think blocks already stripped).
         scope: Optional scope override applied to all committed atoms.
+        default_scope: Scope applied only to candidates the extractor left
+            unscoped, so user-level preferences keep scope='user'.
 
     Returns:
         {
@@ -74,6 +77,10 @@ def run_turn_reflection(
     if scope:
         for c in candidates:
             c["scope"] = scope
+    elif default_scope:
+        for c in candidates:
+            if not c.get("scope"):
+                c["scope"] = default_scope
 
     pipeline = MemoryCommitPipeline()
     committed: list[dict] = []

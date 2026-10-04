@@ -76,7 +76,7 @@ def test_retrieve_memories_disagreement_flag_true_when_score_high(store: SQLiteS
             "embedding_model, embedding, created_at, disagreement_score, lifecycle_status) "
             "VALUES (?,?,?,?,?,?,?,?,?,datetime('now'),?,?)",
             ("abc123", "contested memory", "contested", "fact", None,
-             0.5, 0.5, "fake", json.dumps(emb), 0.9, "active"),
+             0.5, 0.5, store.config.embedding_model, json.dumps(emb), 0.9, "active"),
         )
     results = store.retrieve_memories("contested memory", limit=10, min_similarity=_ANY)
     contested = next((r for r in results if r["id"] == "abc123"), None)
@@ -95,7 +95,7 @@ def test_retrieve_memories_disagreement_flag_false_when_score_low(store: SQLiteS
             "embedding_model, embedding, created_at, disagreement_score, lifecycle_status) "
             "VALUES (?,?,?,?,?,?,?,?,?,datetime('now'),?,?)",
             ("def456", "settled fact", "settled", "fact", None,
-             0.9, 0.8, "fake", json.dumps(emb), 0.1, "active"),
+             0.9, 0.8, store.config.embedding_model, json.dumps(emb), 0.1, "active"),
         )
     results = store.retrieve_memories("settled fact", limit=10, min_similarity=_ANY)
     settled = next((r for r in results if r["id"] == "def456"), None)
@@ -130,7 +130,7 @@ def test_retrieve_memories_archived_atoms_excluded(store: SQLiteStore):
             "embedding_model, embedding, created_at, lifecycle_status) "
             "VALUES (?,?,?,?,?,?,?,?,?,datetime('now'),?)",
             ("archived1", "archived atom content", "archived", "fact", None,
-             0.9, 0.9, "fake", json.dumps(emb), "archived"),
+             0.9, 0.9, store.config.embedding_model, json.dumps(emb), "archived"),
         )
     results = store.retrieve_memories("archived atom content", limit=10, min_similarity=_ANY)
     assert not any(r["id"] == "archived1" for r in results)
@@ -289,7 +289,7 @@ def test_high_confidence_atom_scores_above_low_confidence(store: SQLiteStore):
             "embedding, created_at, disagreement_score, support_weight, lifecycle_status) "
             "VALUES (?,?,?,?,?,?,?,?,datetime('now'),?,?,?)",
             ("hi_conf", "network configuration fact", "fact", None,
-             0.95, 0.8, "fake", json.dumps(emb), 0.0, 0.9, "active"),
+             0.95, 0.8, store.config.embedding_model, json.dumps(emb), 0.0, 0.9, "active"),
         )
         conn.execute(
             "INSERT INTO memory_atoms "
@@ -297,7 +297,7 @@ def test_high_confidence_atom_scores_above_low_confidence(store: SQLiteStore):
             "embedding, created_at, disagreement_score, support_weight, lifecycle_status) "
             "VALUES (?,?,?,?,?,?,?,?,datetime('now'),?,?,?)",
             ("lo_conf", "network configuration fact", "fact", None,
-             0.1, 0.8, "fake", json.dumps(emb), 0.0, 0.0, "active"),
+             0.1, 0.8, store.config.embedding_model, json.dumps(emb), 0.0, 0.0, "active"),
         )
     results = store.retrieve_memories("network configuration", limit=10, min_similarity=_ANY)
     ids_in_order = [r["id"] for r in results]
@@ -319,7 +319,7 @@ def test_contested_atom_scores_below_uncontested(store: SQLiteStore):
             "embedding, created_at, disagreement_score, support_weight, lifecycle_status) "
             "VALUES (?,?,?,?,?,?,?,?,datetime('now'),?,?,?)",
             ("settled", "contested configuration fact", "fact", None,
-             0.8, 0.8, "fake", json.dumps(emb), 0.0, 0.8, "active"),
+             0.8, 0.8, store.config.embedding_model, json.dumps(emb), 0.0, 0.8, "active"),
         )
         conn.execute(
             "INSERT INTO memory_atoms "
@@ -327,7 +327,7 @@ def test_contested_atom_scores_below_uncontested(store: SQLiteStore):
             "embedding, created_at, disagreement_score, support_weight, lifecycle_status) "
             "VALUES (?,?,?,?,?,?,?,?,datetime('now'),?,?,?)",
             ("disputed", "contested configuration fact", "fact", None,
-             0.8, 0.8, "fake", json.dumps(emb), 0.9, 0.8, "active"),
+             0.8, 0.8, store.config.embedding_model, json.dumps(emb), 0.9, 0.8, "active"),
         )
     results = store.retrieve_memories("contested configuration", limit=10, min_similarity=_ANY)
     ids = [r["id"] for r in results]
@@ -355,7 +355,7 @@ def test_get_stale_atoms_contested_atom_appears(store: SQLiteStore):
             "embedding, created_at, disagreement_score, support_weight, lifecycle_status) "
             "VALUES (?,?,?,?,?,?,?,?,datetime('now'),?,?,?)",
             ("contested1", "contested atom for staleness", "fact", None,
-             0.5, 0.5, "fake", json.dumps(emb), 0.8, 0.1, "active"),
+             0.5, 0.5, store.config.embedding_model, json.dumps(emb), 0.8, 0.1, "active"),
         )
     results = store.get_stale_atoms(min_disagreement=0.4)
     assert any(r["id"] == "contested1" for r in results)
@@ -372,7 +372,7 @@ def test_get_stale_atoms_staleness_reasons_present(store: SQLiteStore):
             "embedding, created_at, disagreement_score, support_weight, lifecycle_status) "
             "VALUES (?,?,?,?,?,?,?,?,datetime('now'),?,?,?)",
             ("stale2", "stale reasons test", "fact", None,
-             0.5, 0.5, "fake", json.dumps(emb), 0.9, 0.0, "active"),
+             0.5, 0.5, store.config.embedding_model, json.dumps(emb), 0.9, 0.0, "active"),
         )
     results = store.get_stale_atoms(min_disagreement=0.4)
     flagged = next((r for r in results if r["id"] == "stale2"), None)
@@ -401,7 +401,7 @@ def test_find_near_duplicate_pairs_identical_embeddings_detected(store: SQLiteSt
                 "embedding, created_at, lifecycle_status) "
                 "VALUES (?,?,?,?,?,?,?,?,datetime('now'),?)",
                 (atom_id, f"duplicate content {atom_id}", "fact", None,
-                 0.8, 0.8, "fake", json.dumps(emb), "active"),
+                 0.8, 0.8, store.config.embedding_model, json.dumps(emb), "active"),
             )
     pairs = store.find_near_duplicate_pairs(similarity_threshold=0.99)
     found = any(
@@ -423,7 +423,7 @@ def test_find_near_duplicate_pairs_pair_has_required_fields(store: SQLiteStore):
                 "embedding, created_at, lifecycle_status) "
                 "VALUES (?,?,?,?,?,?,?,?,datetime('now'),?)",
                 (atom_id, f"field check atom {atom_id}", "fact", None,
-                 0.8, 0.8, "fake", json.dumps(emb), "active"),
+                 0.8, 0.8, store.config.embedding_model, json.dumps(emb), "active"),
             )
     pairs = store.find_near_duplicate_pairs(similarity_threshold=0.99)
     for pair in pairs:
@@ -470,7 +470,7 @@ def test_health_report_conflict_rate(store: SQLiteStore):
             "embedding, created_at, disagreement_score, support_weight, lifecycle_status) "
             "VALUES (?,?,?,?,?,?,?,?,datetime('now'),?,?,?)",
             ("health_contested", "contested atom for health test", "fact", "project:test",
-             0.5, 0.7, "fake", json.dumps(emb), 0.7, 0.0, "active"),
+             0.5, 0.7, store.config.embedding_model, json.dumps(emb), 0.7, 0.0, "active"),
         )
         conn.execute(
             "INSERT INTO memory_atoms "
@@ -478,7 +478,7 @@ def test_health_report_conflict_rate(store: SQLiteStore):
             "embedding, created_at, disagreement_score, support_weight, lifecycle_status) "
             "VALUES (?,?,?,?,?,?,?,?,datetime('now'),?,?,?)",
             ("health_clean", "clean atom for health test", "fact", "project:test",
-             0.9, 0.8, "fake", json.dumps(emb), 0.1, 1.0, "active"),
+             0.9, 0.8, store.config.embedding_model, json.dumps(emb), 0.1, 1.0, "active"),
         )
     report = store.health_report()
     assert report["contested_count"] >= 1
@@ -525,7 +525,7 @@ def _insert_atom(store: SQLiteStore, atom_id: str, content: str) -> str:
             "embedding, created_at, lifecycle_status) "
             "VALUES (?,?,?,?,?,?,?,?,datetime('now'),?)",
             (atom_id, content, "fact", "project:test",
-             0.8, 0.7, "fake", json.dumps(emb), "active"),
+             0.8, 0.7, store.config.embedding_model, json.dumps(emb), "active"),
         )
     return atom_id
 

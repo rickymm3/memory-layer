@@ -20,7 +20,7 @@ def store_memory_auto(
     matched_memory_ids: list[str] | None = None,
     task_run_id: str | None = None,
     source_user_id: str | None = None,
-    visibility: str = "public",
+    visibility: str = "private",
 ) -> dict[str, Any]:
     """Store a candidate through the full commit pipeline and return a write report.
 
@@ -40,7 +40,9 @@ def store_memory_auto(
         memory_type: Memory type (fact, decision, instruction, belief, etc.).
         relationship: Reconciler output hint (informational; pipeline re-reconciles).
         context_summary: Compact prompt-friendly summary. Defaults to content.
-        scope: Optional scope string (e.g. 'project:memory-layer').
+        scope: Required scope string ('project:<name>', 'user', or 'model:<id>').
+            Unscoped writes are refused: an unscoped atom leaks into every project.
+        visibility: private (default) | team | public.
         confidence: Confidence float 0.0–1.0. Default 0.8.
         importance: Importance float 0.0–1.0. Default 0.5.
         reconciliation_reason: Reconciler's reason string, if any.
@@ -49,6 +51,25 @@ def store_memory_auto(
     # Fall back to SSE auth context if no explicit source_user_id provided
     if source_user_id is None:
         source_user_id = current_user_id.get()
+
+    if not (scope or "").strip():
+        return {
+            "stored": False,
+            "write_action": "rejected_by_guardrail",
+            "decision": "rejected",
+            "memory_atom_id": None,
+            "memory_signal_id": None,
+            "proposal_id": None,
+            "content": content,
+            "memory_type": memory_type,
+            "scope": scope,
+            "rejection_reason": (
+                "scope is required: use 'project:<name>', 'user', or 'model:<id>'"
+            ),
+            "critic_notes": [],
+        }
+    if visibility not in ("private", "team", "public"):
+        visibility = "private"
 
     # ── Epistemic classifier (replaces old quality gate) ──────────────────────
     quality = score_write_quality(content, memory_type=memory_type, stated_importance=importance, scope=scope)

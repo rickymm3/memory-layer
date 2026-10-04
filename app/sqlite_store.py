@@ -17,6 +17,7 @@ from typing import Any
 
 from app.config import get_config
 from app.llm_provider import LLMProvider, get_embedding_client
+from app.retrieval_policy import CONFLICT_THRESHOLD, VOLATILE_TYPES, attach_conflicts, composite_score
 
 REVISABLE_TYPES: frozenset[str] = frozenset({
     "opinion", "preference", "decision", "lesson", "belief",
@@ -228,7 +229,7 @@ def _normalize(text: str) -> str:
 
 
 # Atom types where recency matters during retrieval ranking.
-_VOLATILE_TYPES: frozenset[str] = frozenset({"opinion", "preference", "lesson", "belief"})
+_VOLATILE_TYPES: frozenset[str] = frozenset(VOLATILE_TYPES)
 
 # Half-life (days) for retrieval recency decay on volatile types.
 _RETRIEVAL_HALF_LIFE_DAYS: float = 90.0
@@ -312,7 +313,7 @@ def _sl_atom_row_to_dict(row: sqlite3.Row | tuple, similarity: float | None = No
         "opposition_weight": float(row[11]) if row[11] is not None else 0.0,
         "disagreement_score": ds,
         "last_recomputed_at": row[13],
-        "disagreement_flag": ds >= 0.5,
+        "disagreement_flag": ds > CONFLICT_THRESHOLD,
         "lifecycle_status": row[14] or "active",
         "superseded_by_atom_id": row[15],
         "lifecycle_reason": row[16],
@@ -440,11 +441,12 @@ class SQLiteStore:
 
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, memory_type FROM memory_atoms WHERE id = ?;", (atom_id,)
+                "SELECT id, memory_type, visibility FROM memory_atoms WHERE id = ?;", (atom_id,)
             ).fetchone()
             if row is None:
                 return None
             atom_memory_type = row[1]
+            atom_visibility = row[2]
 
             signal_rows = conn.execute(
                 "SELECT relationship, confidence, source_key, created_at, source_user_id FROM memory_signals WHERE memory_atom_id = ?;",
@@ -469,7 +471,12 @@ class SQLiteStore:
             }
             for r in signal_rows
         ]
-        weights = compute_atom_weights(signals, memory_type=atom_memory_type, source_trust=source_trust)
+        weights = compute_atom_weights(
+            signals,
+            memory_type=atom_memory_type,
+            source_trust=source_trust,
+            visibility=atom_visibility,
+        )
 
         now = _now()
         with self._connect() as conn:
@@ -581,12 +588,19 @@ class SQLiteStore:
                 return match
         return None
 
-    def find_exact_content_match(self, content: str) -> dict[str, Any] | None:
+    def find_exact_content_match(
+        self,
+        content: str,
+        scope: str | None = None,
+        requesting_user: str | None = None,  # single-user backend: no access filter
+    ) -> dict[str, Any] | None:
         normalized = _normalize(content)
+        scope_sql = "WHERE scope = ? " if scope else ""
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, content, context_summary, memory_type, scope, confidence, importance, created_at "
-                "FROM memory_atoms ORDER BY created_at DESC;"
+                f"FROM memory_atoms {scope_sql}ORDER BY created_at DESC;",
+                (scope,) if scope else (),
             ).fetchall()
         for row in rows:
             if _normalize(row[1]) == normalized:
@@ -643,6 +657,8 @@ class SQLiteStore:
         min_similarity: float | None = None,
         scope_filter: str | None = None,
         scope_filters: list[str] | None = None,
+        requesting_user: str | None = None,  # single-user backend: no access filter
+        include_conflicts: bool = True,
     ) -> list[dict[str, Any]]:
         all_scopes: set[str] | None = None
         if scope_filters:
@@ -658,20 +674,24 @@ class SQLiteStore:
             placeholders = ",".join("?" * len(all_scopes))
             sql = (
                 "SELECT id, content, context_summary, memory_type, scope, confidence, importance, "
-                "embedding, created_at, lifecycle_status, support_weight, opposition_weight, disagreement_score "
+                "embedding, created_at, lifecycle_status, support_weight, opposition_weight, disagreement_score, "
+                "retrieval_priority "
                 "FROM memory_atoms "
                 "WHERE (lifecycle_status IS NULL OR lifecycle_status NOT IN ('superseded','deprecated','archived')) "
-                f"AND (scope IN ({placeholders}) OR scope IS NULL OR scope = 'global');"
+                "AND embedding_model = ? "
+                f"AND scope IN ({placeholders});"
             )
-            params: tuple = tuple(all_scopes)
+            params: tuple = (self.config.embedding_model, *all_scopes)
         else:
             sql = (
                 "SELECT id, content, context_summary, memory_type, scope, confidence, importance, "
-                "embedding, created_at, lifecycle_status, support_weight, opposition_weight, disagreement_score "
+                "embedding, created_at, lifecycle_status, support_weight, opposition_weight, disagreement_score, "
+                "retrieval_priority "
                 "FROM memory_atoms "
-                "WHERE lifecycle_status IS NULL OR lifecycle_status NOT IN ('superseded','deprecated','archived');"
+                "WHERE (lifecycle_status IS NULL OR lifecycle_status NOT IN ('superseded','deprecated','archived')) "
+                "AND embedding_model = ?;"
             )
-            params = ()
+            params = (self.config.embedding_model,)
 
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
@@ -691,10 +711,9 @@ class SQLiteStore:
             conf = float(row[5]) if row[5] is not None else 0.5
             ds = float(row[12]) if row[12] is not None else 0.0
 
-            # Composite: similarity + confidence bonus - disagreement penalty.
-            # High-confidence, uncontested atoms rank above semantically-similar
-            # but contested or low-evidence ones.
-            composite = sim * 0.60 + conf * 0.25 - ds * 0.15
+            imp = float(row[6]) if row[6] is not None else 0.5
+            rp = float(row[13]) if row[13] is not None else 1.0
+            composite = composite_score(sim, conf, imp, rp, ds)
 
             # Volatile types (opinion, preference, lesson, belief) decay so that
             # stale beliefs don't compete equally with fresh ones.
@@ -713,7 +732,8 @@ class SQLiteStore:
                 "support_weight": float(row[10]) if row[10] is not None else 0.0,
                 "opposition_weight": float(row[11]) if row[11] is not None else 0.0,
                 "disagreement_score": ds,
-                "disagreement_flag": ds >= 0.5,
+                "disagreement_flag": ds > CONFLICT_THRESHOLD,
+                "retrieval_priority": rp,
             }
             candidates.append((atom_dict, sim, composite, stored_emb))
 
@@ -724,7 +744,10 @@ class SQLiteStore:
         # are both relevant and diverse — no more 5 redundant near-copies.
         candidates.sort(key=lambda x: x[2], reverse=True)
         pool = candidates[: limit * 3]
-        return _mmr_select(query_emb=embedding, candidates=pool, k=limit)
+        selected = _mmr_select(query_emb=embedding, candidates=pool, k=limit)
+        if include_conflicts:
+            attach_conflicts(self, selected)
+        return selected
 
     # ── Signal / proposal writes ──────────────────────────────────────────────
 
@@ -1071,7 +1094,7 @@ class SQLiteStore:
                 "opposition_weight": float(r[9]) if r[9] is not None else 0.0,
                 "disagreement_score": ds,
                 "last_recomputed_at": r[11],
-                "disagreement_flag": ds >= 0.5,
+                "disagreement_flag": ds > CONFLICT_THRESHOLD,
                 "lifecycle_status": r[12] or "active",
                 "superseded_by_atom_id": r[13],
                 "lifecycle_reason": r[14],
@@ -1083,6 +1106,7 @@ class SQLiteStore:
     def project_context_atoms(
         self, scope: str, limit: int = 10,
         min_importance: float = 0.6, min_confidence: float = 0.7,
+        requesting_user: str | None = None,  # single-user backend: no access filter
     ) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -1110,7 +1134,7 @@ class SQLiteStore:
                 "opposition_weight": float(r[9]) if r[9] is not None else 0.0,
                 "disagreement_score": ds,
                 "last_recomputed_at": r[11],
-                "disagreement_flag": ds >= 0.5,
+                "disagreement_flag": ds > CONFLICT_THRESHOLD,
                 "lifecycle_status": r[12] or "active",
                 "superseded_by_atom_id": r[13],
                 "lifecycle_reason": r[14],
@@ -1119,7 +1143,9 @@ class SQLiteStore:
             })
         return results
 
-    def get_active_atoms_by_scope(self, scope: str, limit: int = 20) -> list[dict[str, Any]]:
+    def get_active_atoms_by_scope(
+        self, scope: str, limit: int = 20, requesting_user: str | None = None
+    ) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -1146,7 +1172,7 @@ class SQLiteStore:
                 "opposition_weight": float(r[9]) if r[9] is not None else 0.0,
                 "disagreement_score": ds,
                 "last_recomputed_at": r[11],
-                "disagreement_flag": ds >= 0.5,
+                "disagreement_flag": ds > CONFLICT_THRESHOLD,
                 "lifecycle_status": r[12] or "active",
                 "superseded_by_atom_id": r[13],
                 "lifecycle_reason": r[14],
@@ -1510,9 +1536,10 @@ class SQLiteStore:
         history_limit: int = 3,
         scope_filter: str | None = None,
         min_similarity: float | None = None,
+        requesting_user: str | None = None,  # single-user backend: no access filter
     ) -> dict[str, Any]:
         """Retrieve current atoms plus semantically relevant historical atoms."""
-        embedding = get_embedding_client().embed_text(query)
+        embedding = self.ollama.embed_text(query)
         threshold = min_similarity if min_similarity is not None else 0.3
 
         with self._connect() as conn:
@@ -1628,7 +1655,7 @@ class SQLiteStore:
             "confidence": float(row[5]), "importance": float(row[6]),
             "support_weight": float(row[7]) if row[7] is not None else 0.0,
             "opposition_weight": float(row[8]) if row[8] is not None else 0.0,
-            "disagreement_score": ds, "disagreement_flag": ds >= 0.5,
+            "disagreement_score": ds, "disagreement_flag": ds > CONFLICT_THRESHOLD,
             "last_recomputed_at": row[10],
             "created_at": row[11],
             "lifecycle_status": row[12] or "active",
@@ -1675,14 +1702,15 @@ class SQLiteStore:
         scope: str | None = None,
         memory_type: str | None = None,
         min_similarity: float = 0.0,
+        requesting_user: str | None = None,  # single-user backend: no access filter
     ) -> list[dict[str, Any]]:
         """Semantic search with signals summary."""
         embedding = self.ollama.embed_text(query)
         clamped = max(0.0, min(float(min_similarity), 1.0))
 
         with self._connect() as conn:
-            conditions = ["lifecycle_status != 'archived'"]
-            params: list[Any] = []
+            conditions = ["lifecycle_status != 'archived'", "embedding_model = ?"]
+            params: list[Any] = [self.config.embedding_model]
             if scope:
                 conditions.append("scope=?")
                 params.append(scope)
@@ -1753,7 +1781,7 @@ class SQLiteStore:
                 "opposition_weight": float(row[10]) if row[10] is not None else 0.0,
                 "disagreement_score": ds,
                 "last_recomputed_at": row[12],
-                "disagreement_flag": ds >= 0.5,
+                "disagreement_flag": ds > CONFLICT_THRESHOLD,
                 "lifecycle_status": row[13] or "active",
                 "superseded_by_atom_id": row[14],
                 "lifecycle_reason": row[15],
@@ -1761,7 +1789,52 @@ class SQLiteStore:
                 "lifecycle_updated_at": row[17],
                 "signals_summary": sigs.get(row[0], _empty),
             })
+        attach_conflicts(self, results)
         return results
+
+    def readable_atom_ids(self, atom_ids: list[str], requesting_user: str | None) -> set[str]:
+        """Single-user backend: every atom is readable."""
+        return {str(i) for i in atom_ids if i}
+
+    def get_conflict_claims(
+        self, atom_ids: list[str], per_side: int = 3
+    ) -> dict[str, dict[str, list[dict[str, Any]]]]:
+        """Attributed supporting and opposing claims per atom (newest per_side each)."""
+        from app.signal_aggregator import AGREEING, CONFLICTING
+
+        out: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        if not atom_ids:
+            return out
+        placeholders = ",".join("?" * len(atom_ids))
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT memory_atom_id, relationship, content, "
+                "COALESCE(source_user_id, source_key), created_at, confidence "
+                f"FROM memory_signals WHERE memory_atom_id IN ({placeholders}) "
+                "ORDER BY created_at DESC;",
+                tuple(atom_ids),
+            ).fetchall()
+        for atom_id, rel, content, source, created_at, conf in rows:
+            if rel in CONFLICTING:
+                side = "opposing"
+            elif rel in AGREEING:
+                side = "supporting"
+            else:
+                continue
+            entry = out.setdefault(atom_id, {"supporting": [], "opposing": []})
+            if len(entry[side]) >= per_side:
+                continue
+            entry[side].append({
+                "content": content,
+                "source": source,
+                "relationship": rel,
+                "created_at": created_at,
+                "confidence": float(conf) if conf is not None else None,
+            })
+        for entry in out.values():
+            for side in entry.values():
+                side.reverse()  # oldest first, matching the Postgres store
+        return out
 
     def log_conversation_turn(
         self,

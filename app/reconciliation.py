@@ -138,8 +138,14 @@ class CandidateReconciler:
         memory_type: str,
         scope: str | None,
         retrieve_limit: int,
+        requesting_user: str | None = None,
     ) -> dict[str, Any]:
-        exact_match = self.store.find_exact_content_match(content)
+        # Reconcile only against atoms in the same scope that the writer can
+        # read: a write must never reinforce or contest another user's private
+        # atom, or an atom in a different project.
+        exact_match = self.store.find_exact_content_match(
+            content, scope=scope, requesting_user=requesting_user
+        )
         if exact_match:
             return {
                 "relationship": "duplicate",
@@ -155,7 +161,13 @@ class CandidateReconciler:
                 },
             }
 
-        related_memories = self.store.retrieve_memories(content, limit=retrieve_limit)
+        related_memories = self.store.retrieve_memories(
+            content,
+            limit=retrieve_limit,
+            scope_filter=scope,
+            requesting_user=requesting_user,
+            include_conflicts=False,
+        )
         prompt = _build_reconciliation_prompt(
             content=content,
             memory_type=memory_type,

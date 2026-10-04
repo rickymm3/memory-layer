@@ -231,11 +231,9 @@ def _build_critic_prompt(
         "personal health/medical info, home addresses, private financial details, "
         "a private individual's full name combined with any contact detail / location / medical / financial info, "
         "internal secrets, or direct personal disclosures the user clearly did not intend to share.\n"
-        '  "public" — everything else: facts, opinions, decisions, beliefs about the world, '
-        "architectural choices, general knowledge, project patterns, observations about tools, "
-        "references to public figures, and philosophical or conceptual ideas — even if they mention a name.\n"
-        "Default is public. Override to private ONLY when the content is clearly sensitive. "
-        "A mention of a person's name is NOT enough — it must also expose personal details."
+        '  "public" — nothing sensitive found. This does NOT publish the atom: the caller\'s '
+        "requested visibility (private by default) still applies. You can only restrict, never widen.\n"
+        "A mention of a person's name is NOT enough for private — it must also expose personal details."
     )
 
 
@@ -324,6 +322,14 @@ def _parse_critic_response(
     context_summary_raw = parsed.get("context_summary")
     context_summary = str(context_summary_raw).strip() if context_summary_raw else None
 
+    # Only "private" is meaningful: the critic can restrict visibility, never widen it.
+    suggested_visibility = "private" if parsed.get("suggested_visibility") == "private" else None
+
+    try:
+        novelty_score = max(0.0, min(1.0, float(parsed.get("novelty_score") or 0.0)))
+    except (TypeError, ValueError):
+        novelty_score = 0.0
+
     return {
         "decision": decision,
         "final_memory_text": final_text,
@@ -333,6 +339,9 @@ def _parse_critic_response(
         "critic_notes": notes,
         "rejection_reason": rejection_reason,
         "context_summary": context_summary,
+        "suggested_visibility": suggested_visibility,
+        "novelty_score": novelty_score,
+        "interest_flag": bool(parsed.get("interest_flag")) or novelty_score >= 0.75,
     }
 
 
@@ -393,11 +402,14 @@ def _effective_visibility(caller_visibility: str, critic: dict) -> str:
 
     The critic's 'private' verdict is the only override — it catches passwords,
     PII, and sensitive personal details even when the caller requests public.
-    Everything else defers to the caller; default is now public.
+    The critic can never widen visibility. Default is private: shared and public
+    are explicit promotions by the caller.
     """
     if critic.get("suggested_visibility") == "private":
         return "private"
-    return caller_visibility or "public"
+    if caller_visibility in ("private", "team", "public"):
+        return caller_visibility
+    return "private"
 
 
 # ── Pipeline class ────────────────────────────────────────────────────────────
@@ -430,7 +442,7 @@ class MemoryCommitPipeline:
         source_key: str = "local_user",
         source_type: str = "local",
         source_user_id: str | None = None,
-        visibility: str = "public",
+        visibility: str = "private",
     ) -> CommitDecision:
         """Run a candidate through the full commit pipeline.
 
@@ -470,6 +482,7 @@ class MemoryCommitPipeline:
                 memory_type=memory_type,
                 scope=scope,
                 retrieve_limit=5,
+                requesting_user=source_user_id,
             )
         except Exception as exc:
             reconciliation = {
@@ -560,7 +573,9 @@ class MemoryCommitPipeline:
                 if final_decision in ("refine_existing", "supersede_existing")
                 else "new"
             )
-            exact_match = self.store.find_exact_content_match(final_text)
+            exact_match = self.store.find_exact_content_match(
+                final_text, scope=final_scope, requesting_user=source_user_id
+            )
             if exact_match:
                 # Degrade to reinforce — already stored verbatim
                 final_decision = "reinforce_existing"
@@ -726,7 +741,7 @@ class MemoryCommitPipeline:
                     source_key=effective_source_key,
                     source_type=effective_source_type,
                     source_user_id=source_user_id,
-                    visibility=visibility,
+                    visibility=_effective_visibility(visibility, critic),
                 )
                 committed_atom_id = atom_id
                 committed_signal_id = signal_id
