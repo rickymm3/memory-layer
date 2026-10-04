@@ -337,8 +337,8 @@ def memory_push_conversation(
     memory atoms from each substantive exchange, and commits them through the
     full write pipeline (reconciler + critic + risk gate).
 
-    Post drafts are generated automatically in the background — check /drafts
-    on the Synapse site for "Based on your conversation, here's a suggested post."
+    When the Synapse layer is loaded (MEMORY_LAYER_PLUGINS=synapse), public
+    atoms also feed its post drafts.
 
     Args:
         transcript: The conversation text. Either plain text with 'User:' /
@@ -436,7 +436,8 @@ def push_to_synapse() -> list[PromptMessage]:
     return [PromptMessage(role="user", content=TextContent(type="text", text=_PUSH_TEXT))]
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Console entry point (pyproject: memory-layer = mcp_server.server:main)."""
     transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
 
     if transport == "sse":
@@ -451,3 +452,7 @@ if __name__ == "__main__":
         uvicorn.run(asgi_app, host="0.0.0.0", port=port, log_level="warning")
     else:
         mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()

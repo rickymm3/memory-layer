@@ -26,6 +26,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.events import emit as emit_event
 from app.llm_provider import LLMProvider, get_llm_client
 from app.memory_store import MemoryStore, REVISABLE_TYPES
 from app.sqlite_store import SQLiteStore as _SQLiteStore
@@ -556,6 +557,7 @@ class MemoryCommitPipeline:
             except Exception:
                 pass
         # ── Step 4: Write action ──────────────────────────────────────────────
+        committed_visibility = _effective_visibility(visibility, critic)
         from scripts.supersede_memory import set_lifecycle_status
 
         duplicate_ids: list[str] = []
@@ -615,31 +617,10 @@ class MemoryCommitPipeline:
                         else None
                     ),
                     source_user_id=source_user_id,
-                    visibility=_effective_visibility(visibility, critic),
+                    visibility=committed_visibility,
                 )
                 committed_atom_id = atom_id
                 committed_signal_id = signal_id
-                # Write novelty fields from critic output
-                _novelty = float(critic.get("novelty_score") or 0.0)
-                _interest = bool(critic.get("interest_flag") or (_novelty >= 0.75))
-                if _novelty > 0 or _interest:
-                    try:
-                        import psycopg as _pg
-                        _cfg = self.store._cfg if hasattr(self.store, "_cfg") else None
-                        _db_url = (
-                            _cfg.database_url
-                            if _cfg
-                            else __import__("os").environ.get("DATABASE_URL", "")
-                        )
-                        with _pg.connect(_db_url) as _conn:
-                            with _conn.cursor() as _cur:
-                                _cur.execute(
-                                    "UPDATE memory_atoms SET novelty_score=%s, interest_flag=%s WHERE id=%s;",
-                                    (_novelty, _interest, committed_atom_id),
-                                )
-                            _conn.commit()
-                    except Exception:
-                        pass  # non-fatal
                 # Auto-link to highly similar neighbors (cosine > 0.85).
                 # Builds the knowledge graph organically without manual calls.
                 _AUTO_LINK_THRESHOLD = 0.85
@@ -670,12 +651,11 @@ class MemoryCommitPipeline:
                             )
                             if sup.get("updated"):
                                 supersedes_ids.append(old_id)
-                                # Weight shifted: re-queue any posts that cited this atom
-                                try:
-                                    from app.post_worker import requeue_posts_for_atom as _rpfa  # noqa: PLC0415
-                                    _rpfa(old_id)
-                                except Exception:
-                                    pass
+                                emit_event(
+                                    "atom_superseded",
+                                    atom_id=old_id,
+                                    superseded_by=committed_atom_id,
+                                )
                         except Exception:
                             pass
                     refines_ids = list(matched_ids)
@@ -741,7 +721,7 @@ class MemoryCommitPipeline:
                     source_key=effective_source_key,
                     source_type=effective_source_type,
                     source_user_id=source_user_id,
-                    visibility=_effective_visibility(visibility, critic),
+                    visibility=committed_visibility,
                 )
                 committed_atom_id = atom_id
                 committed_signal_id = signal_id
@@ -843,156 +823,22 @@ class MemoryCommitPipeline:
         except Exception:
             pass  # trace failure is non-fatal
 
-        # Advance discussion thread_status → 'updated' after a successful dual-write.
-        # Only escalates; never overwrites answered/validated/reopened.
-        if final_decision == "commit" and committed_atom_id:
-            try:
-                import psycopg as _pg
-                _db_url = (
-                    getattr(self.store, "_dsn", None)
-                    or __import__("os").environ.get("DATABASE_URL", "")
-                )
-                if _db_url:
-                    with _pg.connect(_db_url) as _conn:
-                        with _conn.cursor() as _cur:
-                            _cur.execute(
-                                """
-                                UPDATE discussions d
-                                SET thread_status = 'updated'
-                                FROM discussion_atoms da
-                                WHERE da.discussion_id = d.id
-                                  AND da.atom_id = %s
-                                  AND d.thread_status IN ('active', 'gathering');
-                                """,
-                                (committed_atom_id,),
-                            )
-                        _conn.commit()
-            except Exception:
-                pass  # discussion status advancement is non-fatal
-
-        # ── Post-write trigger (background, non-blocking) ────────────────────
-        # When a new atom is committed:
-        # 1. Enqueue it for background post generation (no visibility gate — worker generates drafts)
-        # 2. Check for related discussions the user should know about
-        # Both are async so the commit pipeline itself never slows down.
+        # ── Step 6: Commit event ─────────────────────────────────────────────
+        # Layers built on the core (e.g. Synapse posts and discussions) react
+        # here. The core never imports them; see app/events.py.
         if final_decision in ("commit", "refine_existing") and committed_atom_id:
-            try:
-                from app.post_worker import enqueue as _enqueue_post  # noqa: PLC0415
-                import os as _os
-                import psycopg as _psycopg
-                _db_url = _os.environ.get("DATABASE_URL", "")
-                _scope = None
-                _visibility = None
-                if _db_url:
-                    with _psycopg.connect(_db_url) as _c:
-                        with _c.cursor() as _cur:
-                            _cur.execute(
-                                "SELECT scope, visibility FROM memory_atoms WHERE id = %s",
-                                (committed_atom_id,),
-                            )
-                            _row = _cur.fetchone()
-                            if _row:
-                                _scope, _visibility = _row
-                # Public = enqueue. That's the full gate.
-                # The LLM reads the atom cluster + related embeddings and
-                # decides what becomes a post. We do not pre-filter by type,
-                # score, or scope — that is classification work the LLM does
-                # better than we can. Private (CLI) atoms never generate posts.
-                _should_enqueue = _visibility == "public"
-                if _should_enqueue:
-                    _enqueue_post(committed_atom_id, source_user_id or "local_user", _scope)
-            except Exception:
-                pass
-            try:
-                import threading as _threading
-                _threading.Thread(
-                    target=_post_commit_trigger,
-                    args=(committed_atom_id, source_user_id),
-                    daemon=True,
-                ).start()
-            except Exception:
-                pass  # post-commit trigger failure is never fatal
+            emit_event(
+                "atom_committed",
+                atom_id=committed_atom_id,
+                source_user_id=source_user_id,
+                scope=final_scope,
+                visibility=committed_visibility,
+                decision=final_decision,
+                novelty_score=float(critic.get("novelty_score") or 0.0),
+                interest_flag=bool(
+                    critic.get("interest_flag")
+                    or float(critic.get("novelty_score") or 0.0) >= 0.75
+                ),
+            )
 
         return decision_obj
-
-
-def _post_commit_trigger(atom_id: str, source_user_id: str | None) -> None:
-    """Background trigger: check if a newly committed atom warrants a draft or related-discussion alert.
-
-    Runs in a daemon thread — any exception is swallowed so it never affects the pipeline.
-    """
-    import logging
-    import os
-    _log = logging.getLogger(__name__)
-    try:
-        import psycopg
-        db_url = os.environ.get("DATABASE_URL", "")
-        if not db_url:
-            return
-
-        with psycopg.connect(db_url) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT content, memory_type, scope, visibility,
-                           confidence, importance, topic_tags, interest_flag, novelty_score
-                    FROM memory_atoms
-                    WHERE id = %s AND lifecycle_status = 'active';
-                    """,
-                    (atom_id,),
-                )
-                row = cur.fetchone()
-
-        if not row:
-            return
-
-        content, mtype, scope, visibility, confidence, importance, topic_tags, interest_flag, novelty_score = row
-
-        # Draft generation is now handled by the post_worker queue (enqueued above).
-        # This trigger only handles the related-discussion alert.
-
-        # Related-discussion alert — notify originating user if others have discussed this topic
-        if source_user_id and topic_tags:
-            try:
-                with psycopg.connect(db_url) as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            """
-                            SELECT d.id
-                            FROM discussions d
-                            WHERE d.auto_published = true
-                              AND d.thread_status NOT IN ('unresolved', 'dead')
-                              AND d.topic_tags && %s
-                              AND d.created_by_user_id != (
-                                  SELECT id FROM users WHERE username = %s
-                              )
-                            ORDER BY d.last_activity_at DESC
-                            LIMIT 3;
-                            """,
-                            (topic_tags, source_user_id),
-                        )
-                        related_ids = [str(r[0]) for r in cur.fetchall()]
-
-                if related_ids:
-                    with psycopg.connect(db_url) as conn:
-                        with conn.cursor() as cur:
-                            # Single batch INSERT — avoids N round-trips at scale
-                            cur.execute(
-                                """
-                                INSERT INTO user_notifications
-                                    (user_id, discussion_id, new_atom_count, notification_type)
-                                SELECT u.id, d.id, 0, 'related_discussion'
-                                FROM users u
-                                CROSS JOIN unnest(%s::uuid[]) AS d(id)
-                                WHERE u.username = %s
-                                ON CONFLICT DO NOTHING;
-                                """,
-                                (related_ids, source_user_id),
-                            )
-                        conn.commit()
-                    _log.info("post_commit_trigger: notified %s of %d related discussion(s)", source_user_id, len(related_ids))
-            except Exception as exc:
-                _log.debug("post_commit_trigger: related-discussion alert failed (non-fatal): %s", exc)
-
-    except Exception as exc:
-        _log.debug("post_commit_trigger: outer failure (non-fatal): %s", exc)

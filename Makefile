@@ -119,10 +119,10 @@ docker-logs:
 	docker compose logs -f site
 
 publish-trigger:
-	$(PYTHON) -m app.publish_trigger $(ARGS)
+	$(PYTHON) -m synapse.publish_trigger $(ARGS)
 
 cluster-discussions:
-	$(PYTHON) -m app.discussion_clusterer $(ARGS)
+	$(PYTHON) -m synapse.discussion_clusterer $(ARGS)
 
 reflect:
 	$(PYTHON) scripts/reflect_task.py $(ARGS)

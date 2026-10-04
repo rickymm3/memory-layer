@@ -70,7 +70,7 @@ def _worker_loop() -> None:
             _process_batch()
             _consolidate_drafts_all_users()
             _refresh_regen_tokens(cfg)
-            from app.profile_updater import apply_pending_credibility_reactions  # noqa: PLC0415
+            from synapse.profile_updater import apply_pending_credibility_reactions  # noqa: PLC0415
             apply_pending_credibility_reactions(cfg)
         except Exception as exc:
             _log.warning("post_worker: batch error: %s", exc)
@@ -400,14 +400,14 @@ def _process_pending_perspectives() -> None:
             # Always regenerate responses on the exact post this perspective
             # was submitted to — we know the post_id, so don't rely on
             # embedding distance to rediscover it.
-            from app.response_generator import generate_post_responses  # noqa: PLC0415
+            from synapse.response_generator import generate_post_responses  # noqa: PLC0415
             generate_post_responses(post_id)
 
             # Update contributor's interest vector — writing a perspective is
             # the strongest profile signal we have.
             if username:
                 try:
-                    from app.profile_updater import record_perspective_contribution  # noqa: PLC0415
+                    from synapse.profile_updater import record_perspective_contribution  # noqa: PLC0415
                     record_perspective_contribution(username, post_id)
                 except Exception:
                     pass
@@ -418,7 +418,7 @@ def _process_pending_perspectives() -> None:
             word_count = len(body.split())
             if word_count >= 100 and atom_id and username:
                 try:
-                    from app.article_generator import generate_draft  # noqa: PLC0415
+                    from synapse.article_generator import generate_draft  # noqa: PLC0415
                     standalone = generate_draft(atom_ids=[atom_id], author_username=username)
                     if standalone:
                         with psycopg.connect(cfg.database_url) as _conn:
@@ -518,7 +518,7 @@ def _generate_and_store(
             )
             return
 
-        from app.article_generator import generate_draft  # noqa: PLC0415
+        from synapse.article_generator import generate_draft  # noqa: PLC0415
 
         result = generate_draft(atom_ids=atom_ids, author_username=username)
         if not result:
@@ -627,8 +627,8 @@ def _merge_atoms_into_post(
                     )
             conn.commit()
 
-        from app.consensus_synthesizer import update_post_consensus  # noqa: PLC0415
-        from app.response_generator import generate_post_responses  # noqa: PLC0415
+        from synapse.consensus_synthesizer import update_post_consensus  # noqa: PLC0415
+        from synapse.response_generator import generate_post_responses  # noqa: PLC0415
         update_post_consensus(post_id)
         generate_post_responses(post_id)
 
@@ -647,7 +647,7 @@ def _merge_atoms_into_post(
             if row:
                 all_ids = [str(a) for a in (row[0] or [])]
                 fmt = row[1] or "article"
-                from app.article_generator import generate_draft  # noqa: PLC0415
+                from synapse.article_generator import generate_draft  # noqa: PLC0415
                 generate_draft(
                     atom_ids=all_ids,
                     author_username=username,
@@ -926,7 +926,7 @@ def _merge_cluster(
             return
 
         with psycopg.connect(cfg.database_url) as conn:
-            from app.utils import unique_slug  # noqa: PLC0415
+            from synapse.utils import unique_slug  # noqa: PLC0415
             slug = unique_slug(conn, title)
 
             with conn.cursor() as cur:
@@ -1130,8 +1130,8 @@ def requeue_posts_for_atom(atom_id: str) -> None:
 
         # Update consensus and responses on similar published posts without full regen
         if similar_post_ids:
-            from app.consensus_synthesizer import update_post_consensus  # noqa: PLC0415
-            from app.response_generator import generate_post_responses  # noqa: PLC0415
+            from synapse.consensus_synthesizer import update_post_consensus  # noqa: PLC0415
+            from synapse.response_generator import generate_post_responses  # noqa: PLC0415
             for post_id in similar_post_ids:
                 update_post_consensus(post_id)
                 generate_post_responses(post_id)

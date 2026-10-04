@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from app.feed_publisher import _make_title, _extract_tags
-from app.topic_affinity import rank_discussions_by_affinity, get_user_topic_tags
-from app.discussion_synthesizer import _mechanical_synthesis
+from synapse.feed_publisher import _make_title, _extract_tags
+from synapse.topic_affinity import rank_discussions_by_affinity, get_user_topic_tags
+from synapse.discussion_synthesizer import _mechanical_synthesis
 
 
 # ── _make_title ────────────────────────────────────────────────────────────────

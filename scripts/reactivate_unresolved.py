@@ -89,7 +89,7 @@ def widen_routing(disc: dict, db_url: str, dry_run: bool) -> int:
 
     Returns the count of new notifications sent.
     """
-    from app.topic_affinity import find_users_with_affinity
+    from synapse.topic_affinity import find_users_with_affinity
 
     matched_ids = find_users_with_affinity(
         disc["tags"],
