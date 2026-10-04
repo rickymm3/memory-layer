@@ -241,7 +241,7 @@ def generate_draft(
     if update_post_id:
         # Update existing draft in place — no new row created
         with psycopg.connect(cfg.database_url) as conn:
-            from app.utils import unique_slug  # noqa: PLC0415
+            from synapse.utils import unique_slug  # noqa: PLC0415
             slug = unique_slug(conn, title, exclude_id=update_post_id)
             with conn.cursor() as cur:
                 cur.execute(
@@ -270,7 +270,7 @@ def generate_draft(
         }
 
     with psycopg.connect(cfg.database_url) as conn:
-        from app.utils import unique_slug  # noqa: PLC0415
+        from synapse.utils import unique_slug  # noqa: PLC0415
         slug = unique_slug(conn, title)
 
         with conn.cursor() as cur:
@@ -346,8 +346,8 @@ def _store_post_embedding(post_id: str, atom_ids: list, cfg: Any) -> None:
             conn.commit()
 
         # Trigger consensus synthesis and multi-response generation
-        from app.consensus_synthesizer import update_post_consensus  # noqa: PLC0415
-        from app.response_generator import generate_post_responses  # noqa: PLC0415
+        from synapse.consensus_synthesizer import update_post_consensus  # noqa: PLC0415
+        from synapse.response_generator import generate_post_responses  # noqa: PLC0415
         update_post_consensus(post_id)
         generate_post_responses(post_id)
     except Exception as exc:

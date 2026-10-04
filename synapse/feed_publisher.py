@@ -231,7 +231,7 @@ def _notify_matched_users(
     discussion is still visible to everyone via the broadcast explore feed.
     """
     try:
-        from app.topic_affinity import find_users_with_affinity
+        from synapse.topic_affinity import find_users_with_affinity
         matched_ids = find_users_with_affinity(tags, exclude_user_id, db_url)
         if not matched_ids:
             return

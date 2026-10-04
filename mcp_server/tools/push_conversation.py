@@ -1,8 +1,7 @@
 """MCP tool: memory_push_conversation
 
 Processes a conversation transcript (text or JSONL path) into memory atoms.
-Post drafts are generated automatically by the commit pipeline after atoms land —
-they appear in /drafts once the confidence×importance threshold is crossed.
+Each extracted candidate goes through the full commit pipeline.
 """
 from __future__ import annotations
 
@@ -35,7 +34,6 @@ def push_conversation_tool(
 
     Returns:
         Summary dict with committed_atoms, proposed_atoms, skipped_turns counts.
-        Post drafts surface in /drafts automatically — check there after running.
     """
     if is_jsonl_path:
         jsonl_path = transcript.strip()
@@ -71,10 +69,7 @@ def push_conversation_tool(
         "skipped_turns": result.get("skipped_turns", 0),
         "total_turns": result.get("total_turns", 0),
         "atom_ids": result.get("atom_ids", [])[:20],  # cap to avoid huge payloads
-        "message": (
-            f"Committed {committed} atom(s) from this conversation. "
-            "Post drafts are generated automatically — check /drafts for suggestions."
-        ),
+        "message": f"Committed {committed} atom(s) from this conversation.",
     }
 
 

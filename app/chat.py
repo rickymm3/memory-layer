@@ -723,37 +723,20 @@ def _post_turn_reflection(
     Delegates to app.reflection.run_turn_reflection — single source of truth
     shared with the MCP reflect_turn tool.  Runs in a background thread.
 
-    When route=='direct' (no relevant atoms — AI answering from training alone),
-    committed atoms are also published invisibly to the explore feed so other
-    users can browse and react. The originating user sees nothing.
+    Emits a turn_reflected event afterwards so layers built on the core (for
+    example Synapse's explore feed) can react; see app/events.py.
     """
+    from app.events import emit
     from app.reflection import run_turn_reflection
     result = run_turn_reflection(user_msg, thinking, answer, source_user_id=source_user_id)
-
-    if route == "direct":
-        import os as _os
-        _db_url = _os.environ.get("DATABASE_URL", "")
-        from app.feed_publisher import publish_to_feed, _worth_surfacing
-        committed_ids = [c["atom_id"] for c in result.get("committed", []) if c.get("atom_id")]
-        if committed_ids and _worth_surfacing(committed_ids, _db_url):
-            # Committed atoms cleared the novelty gate — publish with evidence
-            publish_to_feed(
-                user_msg=user_msg,
-                answer=answer,
-                committed_atom_ids=committed_ids,
-                source_user_id=source_user_id,
-                db_url=_db_url,
-            )
-        elif _is_routeable_question(user_msg):
-            # No novel atoms — but the question itself is genuinely unanswered.
-            # Route the question directly so targeted users can respond.
-            publish_to_feed(
-                user_msg=user_msg,
-                answer=answer,
-                committed_atom_ids=[],
-                source_user_id=source_user_id,
-                db_url=_db_url,
-            )
+    emit(
+        "turn_reflected",
+        user_msg=user_msg,
+        answer=answer,
+        committed_atom_ids=[c["atom_id"] for c in result.get("committed", []) if c.get("atom_id")],
+        source_user_id=source_user_id,
+        route=route,
+    )
 
 
 _SMALL_TALK = frozenset({

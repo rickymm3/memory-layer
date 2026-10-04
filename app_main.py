@@ -43,7 +43,7 @@ def create_app() -> Flask:
 
     # Start background post generation worker (daemon thread, survives across requests)
     try:
-        from app.post_worker import start_worker
+        from synapse.post_worker import start_worker
         start_worker()
     except Exception:
         pass

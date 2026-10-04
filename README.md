@@ -15,6 +15,17 @@ A production-ready memory backend that plugs into Claude Desktop, VS Code, and t
 
 ---
 
+## Repository layout
+
+The repo holds two layers. The memory core runs on its own; Synapse is built on top of it.
+
+| Layer | Code | Depends on |
+|---|---|---|
+| **Memory core** | `app/` (store, commit pipeline, retrieval, reflection, chat), `mcp_server/`, `plugin/`, `db/`, `scripts/` | nothing in Synapse |
+| **Synapse** | `synapse/` (posts, discussions, feed, workers), `webapp/`, `app_main.py` | the core |
+
+The core never imports Synapse; `tests/test_core_boundary.py` enforces it. Synapse reacts to writes through commit events (`app/events.py`): `atom_committed`, `atom_superseded`, `turn_reflected`. Importing `synapse` registers its handlers, so the site gets them automatically. A core-only process such as the MCP server loads them with `MEMORY_LAYER_PLUGINS=synapse`. Without it, the MCP server is a plain memory layer and never touches posts or discussions.
+
 ## Architecture
 
 ### Memory store

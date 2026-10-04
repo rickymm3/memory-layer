@@ -34,6 +34,8 @@ dev = [
 memory-layer = "mcp_server.server:main"
 
 [tool.hatch.build.targets.wheel]
+# The memory core only. Synapse (synapse/, webapp/, app_main.py) is not shipped
+# in this wheel; it runs from the repo and depends on the core.
 packages = ["app", "mcp_server"]
 
 [tool.pytest.ini_options]

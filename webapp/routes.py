@@ -116,7 +116,7 @@ def landing():
         pass
 
     try:
-        from app.feed_ranker import get_personalized_feed  # noqa: PLC0415
+        from synapse.feed_ranker import get_personalized_feed  # noqa: PLC0415
         cat_kws = list(_CATEGORIES[category]["keywords"]) if category else None
         username = current_user.username if current_user.is_authenticated else None
         raw_rows = get_personalized_feed(username=username, category_keywords=cat_kws, sort=sort)
@@ -624,7 +624,7 @@ def post_detail(post_ref):
     # Record view + update interest vector (non-blocking, best-effort)
     if current_user.is_authenticated and post.get("status") == "published":
         try:
-            from app.profile_updater import record_post_view  # noqa: PLC0415
+            from synapse.profile_updater import record_post_view  # noqa: PLC0415
             record_post_view(current_user.username, str(post_id))
         except Exception:
             pass
@@ -826,7 +826,7 @@ def post_react(post_id):
 
     # Update interest vector — reactions are a strong signal
     try:
-        from app.profile_updater import record_post_reaction  # noqa: PLC0415
+        from synapse.profile_updater import record_post_reaction  # noqa: PLC0415
         record_post_reaction(current_user.username, str(post_id), vote)
     except Exception:
         pass
@@ -965,7 +965,7 @@ def response_react(response_id):
 @login_required
 def regenerate_draft(post_id):
     """Rewrite a draft in place, consuming 1 regen token."""
-    from app.article_generator import generate_draft  # noqa: PLC0415
+    from synapse.article_generator import generate_draft  # noqa: PLC0415
 
     notes = request.form.get("notes", "").strip()
 
@@ -1082,7 +1082,7 @@ def drafts():
 def generate_draft_from_suggestion():
     """Turn a headline suggestion into a full draft by calling the article generator."""
     import json as _json
-    from app.article_generator import generate_draft
+    from synapse.article_generator import generate_draft
 
     raw_ids = request.form.get("atom_ids", "")
     format_hint = request.form.get("format", None)
@@ -1111,7 +1111,7 @@ def generate_draft_from_suggestion():
 @site_bp.route("/connections")
 @login_required
 def connections():
-    from app.topic_matcher import find_connections_for_user
+    from synapse.topic_matcher import find_connections_for_user
     matches = []
     try:
         matches = find_connections_for_user(username=current_user.username, limit=15)
@@ -1570,7 +1570,7 @@ def explore():
     user_tags: list[str] = []
     if current_user.is_authenticated and rows:
         try:
-            from app.topic_affinity import get_user_topic_tags, rank_discussions_by_affinity
+            from synapse.topic_affinity import get_user_topic_tags, rank_discussions_by_affinity
             import os as _os
             user_tags = get_user_topic_tags(
                 current_user.username, _os.environ.get("DATABASE_URL", "")
@@ -1687,7 +1687,7 @@ def search():
             pass
 
         try:
-            from app.topic_affinity import get_user_topic_tags  # noqa: F401
+            from synapse.topic_affinity import get_user_topic_tags  # noqa: F401
             import os as _os
             store = __import__("app.db", fromlist=["get_store"]).get_store()
             atom_rows = store.search_memories_full(

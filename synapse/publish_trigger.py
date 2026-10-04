@@ -1,8 +1,8 @@
 """Publish trigger: monitor public atoms and generate draft posts when thresholds are met.
 
 Run as a one-shot check or in a loop:
-    python -m app.publish_trigger
-    python -m app.publish_trigger --loop
+    python -m synapse.publish_trigger
+    python -m synapse.publish_trigger --loop
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any
 
 import psycopg
 
-from app.article_generator import generate_draft
+from synapse.article_generator import generate_draft
 from app.config import get_config
 
 PUBLISH_THRESHOLD = 0.65   # confidence × importance
