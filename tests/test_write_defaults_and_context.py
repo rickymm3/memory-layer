@@ -24,6 +24,20 @@ def test_critic_can_restrict_but_not_widen():
     assert _effective_visibility("public", {"suggested_visibility": "public"}) == "public"
 
 
+def test_critic_private_verdict_survives_parsing():
+    """The parser used to drop suggested_visibility, so the critic's
+    sensitive-content override never reached _effective_visibility."""
+    from app.commit_pipeline import _parse_critic_response
+
+    raw = '{"decision":"commit","final_memory_text":"x","suggested_visibility":"private"}'
+    critic = _parse_critic_response(raw, "x", "fact", "user", 0.8)
+    assert _effective_visibility("public", critic) == "private"
+
+    raw = '{"decision":"commit","final_memory_text":"x","suggested_visibility":"public"}'
+    critic = _parse_critic_response(raw, "x", "fact", "user", 0.8)
+    assert _effective_visibility("team", critic) == "team"
+
+
 def test_store_auto_requires_scope(monkeypatch):
     from mcp_server.tools import store_auto
 

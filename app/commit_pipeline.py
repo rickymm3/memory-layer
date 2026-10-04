@@ -322,6 +322,14 @@ def _parse_critic_response(
     context_summary_raw = parsed.get("context_summary")
     context_summary = str(context_summary_raw).strip() if context_summary_raw else None
 
+    # Only "private" is meaningful: the critic can restrict visibility, never widen it.
+    suggested_visibility = "private" if parsed.get("suggested_visibility") == "private" else None
+
+    try:
+        novelty_score = max(0.0, min(1.0, float(parsed.get("novelty_score") or 0.0)))
+    except (TypeError, ValueError):
+        novelty_score = 0.0
+
     return {
         "decision": decision,
         "final_memory_text": final_text,
@@ -331,6 +339,9 @@ def _parse_critic_response(
         "critic_notes": notes,
         "rejection_reason": rejection_reason,
         "context_summary": context_summary,
+        "suggested_visibility": suggested_visibility,
+        "novelty_score": novelty_score,
+        "interest_flag": bool(parsed.get("interest_flag")) or novelty_score >= 0.75,
     }
 
 
